@@ -30,6 +30,7 @@ type settings struct {
 	Scale       int    `json:"scale"`
 	Sensitivity string `json:"sensitivity"`
 	HoldMillis  int64  `json:"hold_ms"`
+	Style       string `json:"style"`
 	BaseSize    int    `json:"base_cursor_size"` // user's normal cursor size (px)
 }
 
@@ -55,6 +56,9 @@ func loadSettings(def settings) settings {
 	}
 	if s.HoldMillis <= 0 {
 		s.HoldMillis = def.HoldMillis
+	}
+	if s.Style == "" {
+		s.Style = def.Style
 	}
 	return s
 }
@@ -120,7 +124,9 @@ func main() {
 		if normal <= 0 {
 			normal = cursor.DefaultBaseSize
 		}
-		_ = cursor.NewWin32(1, normal).Restore()
+		// Native restore resets the base size and reloads the scheme, undoing
+		// whichever style was active.
+		_ = cursor.NewWin32(1, normal, cursor.StyleNative).Restore()
 		return
 	}
 
@@ -135,7 +141,7 @@ func main() {
 	}
 	defer release()
 
-	s := loadSettings(settings{Scale: *scale, Sensitivity: *sens, HoldMillis: *hold})
+	s := loadSettings(settings{Scale: *scale, Sensitivity: *sens, HoldMillis: *hold, Style: string(cursor.StyleCrisp)})
 	// Explicit flags override the config file.
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -163,13 +169,15 @@ func main() {
 	}
 
 	normal := s.BaseSize
-	newEnlarger := func(scale int) cursor.Enlarger { return cursor.NewWin32(scale, normal) }
+	newEnlarger := func(scale int, style string) cursor.Enlarger {
+		return cursor.NewWin32(scale, normal, cursor.Style(style))
+	}
 
 	ctrl := control.New(
-		control.Settings{Scale: s.Scale, Sensitivity: s.Sensitivity, HoldMillis: s.HoldMillis},
+		control.Settings{Scale: s.Scale, Sensitivity: s.Sensitivity, HoldMillis: s.HoldMillis, Style: s.Style},
 		newEnlarger,
 		func(ns control.Settings) {
-			s.Scale, s.Sensitivity, s.HoldMillis = ns.Scale, ns.Sensitivity, ns.HoldMillis
+			s.Scale, s.Sensitivity, s.HoldMillis, s.Style = ns.Scale, ns.Sensitivity, ns.HoldMillis, ns.Style
 			_ = saveSettings(s)
 		},
 	)
@@ -189,6 +197,10 @@ func main() {
 		s.Scale, s.Sensitivity, s.HoldMillis)
 
 	cb := lifecycle.TrayCallbacks{
+		Styles: []lifecycle.StyleOption{
+			{Label: "Crisp arrow", Value: string(cursor.StyleCrisp)},
+			{Label: "System (zoom)", Value: string(cursor.StyleSystem)},
+		},
 		Scales:        []int{2, 3, 4, 5, 6, 8},
 		Sensitivities: []string{"low", "medium", "high"},
 		Holds: []lifecycle.HoldOption{
@@ -196,10 +208,12 @@ func main() {
 			{Label: "Normal (1s)", Millis: 1000},
 			{Label: "Long (1.5s)", Millis: 1500},
 		},
+		CurrentStyle:       func() string { return ctrl.Get().Style },
 		CurrentScale:       func() int { return ctrl.Get().Scale },
 		CurrentSensitivity: func() string { return ctrl.Get().Sensitivity },
 		CurrentHold:        func() int64 { return ctrl.Get().HoldMillis },
 		AutostartOn:        autostartEnabled,
+		OnStyle:            ctrl.SetStyle,
 		OnScale:            ctrl.SetScale,
 		OnSensitivity:      ctrl.SetSensitivity,
 		OnHold:             ctrl.SetHold,

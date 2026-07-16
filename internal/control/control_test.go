@@ -15,11 +15,11 @@ func (f *fakeEnl) Restore() error { f.res++; return nil }
 func TestSetScaleRebuildsAndPersists(t *testing.T) {
 	var made []int
 	var persisted Settings
-	factory := func(scale int) cursor.Enlarger {
+	factory := func(scale int, style string) cursor.Enlarger {
 		made = append(made, scale)
 		return &fakeEnl{}
 	}
-	c := New(Settings{Scale: 4, Sensitivity: "medium", HoldMillis: 1000}, factory, func(s Settings) {
+	c := New(Settings{Scale: 4, Sensitivity: "medium", HoldMillis: 1000, Style: "crisp"}, factory, func(s Settings) {
 		persisted = s
 	})
 
@@ -41,8 +41,8 @@ func TestSetScaleRebuildsAndPersists(t *testing.T) {
 
 func TestStepEnlargesOnShake(t *testing.T) {
 	fe := &fakeEnl{}
-	c := New(Settings{Scale: 4, Sensitivity: "high", HoldMillis: 1000},
-		func(int) cursor.Enlarger { return fe }, nil)
+	c := New(Settings{Scale: 4, Sensitivity: "high", HoldMillis: 1000, Style: "crisp"},
+		func(int, string) cursor.Enlarger { return fe }, nil)
 
 	var ms int64
 	for _, x := range []int32{0, 30, 0, 30, 0, 30, 0} {

@@ -63,6 +63,7 @@ const (
 	idSensBase        = 200 // idSensBase + index
 	idHoldBase        = 300 // idHoldBase + index
 	idToggleAutostart = 400
+	idStyleBase       = 500 // idStyleBase + index
 	idQuit            = 900
 )
 
@@ -72,17 +73,26 @@ type HoldOption struct {
 	Millis int64
 }
 
+// StyleOption is one entry in the cursor-style submenu.
+type StyleOption struct {
+	Label string
+	Value string
+}
+
 // TrayCallbacks describe the menu contents and the actions for each item.
 type TrayCallbacks struct {
+	Styles        []StyleOption
 	Scales        []int
 	Sensitivities []string
 	Holds         []HoldOption
 
+	CurrentStyle       func() string
 	CurrentScale       func() int
 	CurrentSensitivity func() string
 	CurrentHold        func() int64
 	AutostartOn        func() bool
 
+	OnStyle           func(value string)
 	OnScale           func(scale int)
 	OnSensitivity     func(name string)
 	OnHold            func(ms int64)
@@ -209,6 +219,17 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 func showMenu(hwnd uintptr) {
 	menu, _, _ := procCreatePopupMenu.Call()
 
+	styleMenu, _, _ := procCreatePopupMenu.Call()
+	curStyle := trayCB.CurrentStyle()
+	for i, st := range trayCB.Styles {
+		flags := uintptr(mfString)
+		if st.Value == curStyle {
+			flags |= mfChecked
+		}
+		appendMenu(styleMenu, flags, uintptr(idStyleBase+i), st.Label)
+	}
+	appendMenu(menu, mfString|mfPopup, styleMenu, "Cursor")
+
 	scaleMenu, _, _ := procCreatePopupMenu.Call()
 	curScale := trayCB.CurrentScale()
 	for _, s := range trayCB.Scales {
@@ -266,6 +287,11 @@ func showMenu(hwnd uintptr) {
 
 func dispatch(id int) {
 	switch {
+	case id >= idStyleBase && id < idStyleBase+100:
+		i := id - idStyleBase
+		if i >= 0 && i < len(trayCB.Styles) {
+			trayCB.OnStyle(trayCB.Styles[i].Value)
+		}
 	case id >= idScaleBase && id < idSensBase:
 		trayCB.OnScale(id - idScaleBase)
 	case id >= idSensBase && id < idHoldBase:

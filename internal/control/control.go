@@ -17,21 +17,22 @@ type Settings struct {
 	Scale       int
 	Sensitivity string
 	HoldMillis  int64
+	Style       string
 }
 
 // Controller wires Settings to a detector + enlarger and applies live changes.
 type Controller struct {
 	mu          sync.Mutex
 	set         Settings
-	newEnlarger func(scale int) cursor.Enlarger
+	newEnlarger func(scale int, style string) cursor.Enlarger
 	cur         cursor.Enlarger
 	app         *app.App
 	onChange    func(Settings)
 }
 
-// New builds a Controller. newEnlarger creates an enlarger for a given scale;
-// onChange (optional) is called after every change so callers can persist.
-func New(set Settings, newEnlarger func(scale int) cursor.Enlarger, onChange func(Settings)) *Controller {
+// New builds a Controller. newEnlarger creates an enlarger for a given scale and
+// style; onChange (optional) is called after every change so callers can persist.
+func New(set Settings, newEnlarger func(scale int, style string) cursor.Enlarger, onChange func(Settings)) *Controller {
 	c := &Controller{set: set, newEnlarger: newEnlarger, onChange: onChange}
 	c.rebuild()
 	return c
@@ -40,7 +41,7 @@ func New(set Settings, newEnlarger func(scale int) cursor.Enlarger, onChange fun
 // rebuild recreates the enlarger, detector, and app from the current settings.
 // Callers must hold c.mu (or be in the constructor).
 func (c *Controller) rebuild() {
-	c.cur = c.newEnlarger(c.set.Scale)
+	c.cur = c.newEnlarger(c.set.Scale, c.set.Style)
 	det := shake.New(config.ShakeConfig(config.Sensitivity(c.set.Sensitivity), c.set.HoldMillis))
 	c.app = app.New(det, c.cur)
 }
@@ -74,6 +75,9 @@ func (c *Controller) SetSensitivity(s string) { c.apply(func() { c.set.Sensitivi
 
 // SetHold changes how long the cursor stays enlarged after the last shake.
 func (c *Controller) SetHold(ms int64) { c.apply(func() { c.set.HoldMillis = ms }) }
+
+// SetStyle changes the enlargement style (crisp / system / native).
+func (c *Controller) SetStyle(style string) { c.apply(func() { c.set.Style = style }) }
 
 // Get returns a copy of the current settings.
 func (c *Controller) Get() Settings {
