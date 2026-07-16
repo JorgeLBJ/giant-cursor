@@ -12,15 +12,14 @@ const (
 	High   Sensitivity = "high"
 )
 
-// ShakeConfig builds a shake.Config for the given sensitivity and idle timeout.
+// ShakeConfig builds a shake.Config for the given sensitivity and hold time.
 // Unknown values fall back to Medium. Starting thresholds; tune with real use.
-func ShakeConfig(s Sensitivity, idleMillis int64) shake.Config {
+func ShakeConfig(s Sensitivity, holdMillis int64) shake.Config {
 	cfg := shake.Config{
-		WindowMillis:   400,
-		MinReversals:   4,
-		NoiseFloor:     4,
-		IdleMillis:     idleMillis,
-		IdleMoveThresh: 3,
+		WindowMillis: 400,
+		MinReversals: 4,
+		NoiseFloor:   4,
+		HoldMillis:   holdMillis,
 	}
 	switch s {
 	case High:

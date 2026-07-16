@@ -23,7 +23,7 @@ func TestEnlargeOnShakeRestoreOnIdle(t *testing.T) {
 	fe := &fakeEnlarger{}
 	det := shake.New(shake.Config{
 		WindowMillis: 500, MinReversals: 4, NoiseFloor: 3,
-		IdleMillis: 1000, IdleMoveThresh: 3,
+		HoldMillis: 1000,
 	})
 	a := New(det, fe)
 

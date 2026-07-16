@@ -22,7 +22,7 @@ func feed(d *Detector, xs, ys []int32, stepMillis int64) State {
 }
 
 func shakeCfg() Config {
-	return Config{WindowMillis: 500, MinReversals: 4, NoiseFloor: 3, IdleMillis: 1000, IdleMoveThresh: 3}
+	return Config{WindowMillis: 500, MinReversals: 4, NoiseFloor: 3, HoldMillis: 1000}
 }
 
 func TestHorizontalShakeTriggersBig(t *testing.T) {
@@ -61,35 +61,58 @@ func TestDiagonalShakeTriggersBig(t *testing.T) {
 	}
 }
 
-func TestIdleReturnsToNormal(t *testing.T) {
+func TestHoldExpiresReturnsToNormal(t *testing.T) {
 	d := New(shakeCfg())
 	feed(d, []int32{0, 30, 0, 30, 0, 30, 0}, []int32{0, 0, 0, 0, 0, 0, 0}, 20)
 	if d.State() != StateBig {
 		t.Fatalf("precondition failed: want BIG, got %v", d.State())
 	}
-	// Hold still well past IdleMillis (1000ms): same position, later timestamp.
-	st := d.Update(Sample{Pos: d.lastPos, Millis: 10000})
+	// Well past HoldMillis (1000ms) with no further shaking -> NORMAL.
+	st := d.Update(Sample{Pos: Point{X: 0}, Millis: 10000})
 	if st != StateNormal {
-		t.Fatalf("want NORMAL after idle, got %v", st)
+		t.Fatalf("want NORMAL after hold, got %v", st)
 	}
 }
 
-func TestContinuedMovementKeepsBig(t *testing.T) {
+func TestSmoothMovementShrinksAfterHold(t *testing.T) {
 	d := New(shakeCfg())
 	feed(d, []int32{0, 30, 0, 30, 0, 30, 0}, []int32{0, 0, 0, 0, 0, 0, 0}, 20)
 	if d.State() != StateBig {
 		t.Fatalf("precondition failed: want BIG, got %v", d.State())
 	}
-	// Keep moving > IdleMoveThresh with time steps < IdleMillis.
-	var ms int64 = 200
-	var x int32
+	// Move smoothly (no reversals): it must shrink after the hold EVEN while
+	// the mouse keeps moving. This is the core fix: movement no longer holds it.
+	var ms int64 = 140
+	var x int32 = 100
 	st := d.State()
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 60; i++ {
 		x += 10
 		ms += 50
 		st = d.Update(Sample{Pos: Point{X: x}, Millis: ms})
 	}
+	if st != StateNormal {
+		t.Fatalf("want NORMAL after hold while moving smoothly, got %v", st)
+	}
+}
+
+func TestReshakeKeepsBig(t *testing.T) {
+	d := New(shakeCfg())
+	feed(d, []int32{0, 30, 0, 30, 0, 30, 0}, []int32{0, 0, 0, 0, 0, 0, 0}, 20)
+	if d.State() != StateBig {
+		t.Fatalf("precondition failed: want BIG, got %v", d.State())
+	}
+	// Keep shaking well past the hold; continued shakes must re-arm and keep BIG.
+	var ms int64 = 140
+	st := d.State()
+	for i := 0; i < 200; i++ {
+		var x int32
+		if i%2 == 1 {
+			x = 30
+		}
+		ms += 20
+		st = d.Update(Sample{Pos: Point{X: x}, Millis: ms})
+	}
 	if st != StateBig {
-		t.Fatalf("want BIG while still moving, got %v", st)
+		t.Fatalf("want BIG while still shaking, got %v", st)
 	}
 }

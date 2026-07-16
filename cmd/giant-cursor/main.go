@@ -30,7 +30,7 @@ const (
 type settings struct {
 	Scale       int    `json:"scale"`
 	Sensitivity string `json:"sensitivity"`
-	IdleMillis  int64  `json:"idle_ms"`
+	HoldMillis  int64  `json:"hold_ms"`
 }
 
 func configPath() string {
@@ -53,8 +53,8 @@ func loadSettings(def settings) settings {
 	if s.Sensitivity == "" {
 		s.Sensitivity = def.Sensitivity
 	}
-	if s.IdleMillis <= 0 {
-		s.IdleMillis = def.IdleMillis
+	if s.HoldMillis <= 0 {
+		s.HoldMillis = def.HoldMillis
 	}
 	return s
 }
@@ -93,7 +93,7 @@ func setAutostart(enabled bool) error {
 func main() {
 	scale := flag.Int("scale", 4, "cursor enlargement factor")
 	sens := flag.String("sensitivity", "medium", "shake sensitivity: low|medium|high")
-	idle := flag.Int64("idle-ms", 1000, "idle milliseconds before shrinking back")
+	hold := flag.Int64("hold-ms", 1000, "milliseconds to stay enlarged after the last shake")
 	install := flag.Bool("install", false, "enable autostart and save settings, then run")
 	uninstall := flag.Bool("uninstall", false, "disable autostart, restore cursors, and exit")
 	restore := flag.Bool("restore", false, "restore cursors and exit (panic button)")
@@ -124,7 +124,7 @@ func main() {
 	}
 	defer release()
 
-	s := loadSettings(settings{Scale: *scale, Sensitivity: *sens, IdleMillis: *idle})
+	s := loadSettings(settings{Scale: *scale, Sensitivity: *sens, HoldMillis: *hold})
 	// Explicit flags override the config file.
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -132,8 +132,8 @@ func main() {
 			s.Scale = *scale
 		case "sensitivity":
 			s.Sensitivity = *sens
-		case "idle-ms":
-			s.IdleMillis = *idle
+		case "hold-ms":
+			s.HoldMillis = *hold
 		}
 	})
 	cur = cursor.NewWin32(s.Scale)
@@ -151,7 +151,7 @@ func main() {
 	// enlarged is fixed simply by launching again.
 	_ = cur.Restore()
 
-	det := shake.New(config.ShakeConfig(config.Sensitivity(s.Sensitivity), s.IdleMillis))
+	det := shake.New(config.ShakeConfig(config.Sensitivity(s.Sensitivity), s.HoldMillis))
 	application := app.New(det, cur)
 	poller := input.NewWin32Poller()
 
@@ -159,8 +159,8 @@ func main() {
 	cleanup := func() { _ = cur.Restore() }
 	lifecycle.OnConsoleClose(cleanup)
 
-	fmt.Printf("Giant Cursor running (scale=%d, sensitivity=%s, idle=%dms). Shake to enlarge. Ctrl+Alt+Q to quit.\n",
-		s.Scale, s.Sensitivity, s.IdleMillis)
+	fmt.Printf("Giant Cursor running (scale=%d, sensitivity=%s, hold=%dms). Shake to enlarge. Ctrl+Shift+F12 to quit.\n",
+		s.Scale, s.Sensitivity, s.HoldMillis)
 
 	go runLoop(application, poller, done)
 

@@ -27,24 +27,21 @@ func (s State) String() string {
 	return "NORMAL"
 }
 
-// Config tunes shake and idle detection.
+// Config tunes shake and hold behaviour.
 type Config struct {
-	WindowMillis   int64 // sliding window for counting reversals
-	MinReversals   int   // reversals within window to trigger BIG
-	NoiseFloor     int32 // per-step axis delta below this (px) is ignored
-	IdleMillis     int64 // idle time before returning to NORMAL
-	IdleMoveThresh int32 // per-step move below this (px) counts as idle
+	WindowMillis int64 // sliding window for counting reversals
+	MinReversals int   // reversals within window to trigger BIG
+	NoiseFloor   int32 // per-step axis delta below this (px) is ignored
+	HoldMillis   int64 // time to stay BIG after the last detected shake
 }
 
-// Detector is a stateful shake/idle detector. Not safe for concurrent use;
+// Detector is a stateful shake/hold detector. Not safe for concurrent use;
 // call Update from a single goroutine.
 type Detector struct {
-	cfg            Config
-	samples        []Sample
-	state          State
-	lastMoveMillis int64
-	lastPos        Point
-	haveLast       bool
+	cfg             Config
+	samples         []Sample
+	state           State
+	lastShakeMillis int64
 }
 
 // New returns a Detector in the NORMAL state.
@@ -63,21 +60,12 @@ func abs32(v int32) int32 {
 }
 
 // Update feeds one sample and returns the resulting state.
+//
+// A shake (enough direction reversals within the window) enlarges the cursor
+// and arms a hold timer. The cursor stays BIG until HoldMillis pass with no
+// further shake — plain smooth movement does NOT keep it big. Shaking again
+// re-arms the hold.
 func (d *Detector) Update(s Sample) State {
-	if d.haveLast {
-		moved := abs32(s.Pos.X - d.lastPos.X)
-		if dy := abs32(s.Pos.Y - d.lastPos.Y); dy > moved {
-			moved = dy
-		}
-		if moved > d.cfg.IdleMoveThresh {
-			d.lastMoveMillis = s.Millis
-		}
-	} else {
-		d.lastMoveMillis = s.Millis
-	}
-	d.haveLast = true
-	d.lastPos = s.Pos
-
 	d.samples = append(d.samples, s)
 	cutoff := s.Millis - d.cfg.WindowMillis
 	drop := 0
@@ -88,14 +76,21 @@ func (d *Detector) Update(s Sample) State {
 		d.samples = d.samples[drop:]
 	}
 
+	shaking := d.reversals() >= d.cfg.MinReversals
+
 	switch d.state {
 	case StateNormal:
-		if d.reversals() >= d.cfg.MinReversals {
+		if shaking {
 			d.state = StateBig
-			d.samples = d.samples[:0] // require a fresh shake next time
+			d.lastShakeMillis = s.Millis
+			d.samples = d.samples[:0] // require a fresh burst to re-arm
 		}
 	case StateBig:
-		if s.Millis-d.lastMoveMillis >= d.cfg.IdleMillis {
+		switch {
+		case shaking:
+			d.lastShakeMillis = s.Millis
+			d.samples = d.samples[:0]
+		case s.Millis-d.lastShakeMillis >= d.cfg.HoldMillis:
 			d.state = StateNormal
 			d.samples = d.samples[:0]
 		}

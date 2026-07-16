@@ -14,8 +14,8 @@ func TestUnknownDefaultsToMedium(t *testing.T) {
 	}
 }
 
-func TestIdleMillisPassthrough(t *testing.T) {
-	if ShakeConfig(Medium, 750).IdleMillis != 750 {
-		t.Fatal("idle millis not propagated")
+func TestHoldMillisPassthrough(t *testing.T) {
+	if ShakeConfig(Medium, 750).HoldMillis != 750 {
+		t.Fatal("hold millis not propagated")
 	}
 }
