@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"giant-cursor/internal/shake"
+	"github.com/JorgeLBJ/giant-cursor/internal/shake"
 	"golang.org/x/sys/windows"
 )
 

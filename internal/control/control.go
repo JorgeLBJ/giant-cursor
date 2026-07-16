@@ -6,10 +6,10 @@ package control
 import (
 	"sync"
 
-	"giant-cursor/internal/app"
-	"giant-cursor/internal/config"
-	"giant-cursor/internal/cursor"
-	"giant-cursor/internal/shake"
+	"github.com/JorgeLBJ/giant-cursor/internal/app"
+	"github.com/JorgeLBJ/giant-cursor/internal/config"
+	"github.com/JorgeLBJ/giant-cursor/internal/cursor"
+	"github.com/JorgeLBJ/giant-cursor/internal/shake"
 )
 
 // Settings are the values the user can change at runtime.

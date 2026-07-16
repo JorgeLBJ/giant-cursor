@@ -3,8 +3,8 @@
 package app
 
 import (
-	"giant-cursor/internal/cursor"
-	"giant-cursor/internal/shake"
+	"github.com/JorgeLBJ/giant-cursor/internal/cursor"
+	"github.com/JorgeLBJ/giant-cursor/internal/shake"
 )
 
 // App drives the enlarge/restore side effects from detector state changes.

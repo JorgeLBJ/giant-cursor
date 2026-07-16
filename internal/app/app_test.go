@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"giant-cursor/internal/shake"
+	"github.com/JorgeLBJ/giant-cursor/internal/shake"
 )
 
 type fakeEnlarger struct{ enlarged, restored int }

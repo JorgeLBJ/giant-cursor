@@ -3,8 +3,8 @@ package control
 import (
 	"testing"
 
-	"giant-cursor/internal/cursor"
-	"giant-cursor/internal/shake"
+	"github.com/JorgeLBJ/giant-cursor/internal/cursor"
+	"github.com/JorgeLBJ/giant-cursor/internal/shake"
 )
 
 type fakeEnl struct{ enl, res int }

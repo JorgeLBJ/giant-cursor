@@ -1,7 +1,7 @@
 // Package config maps human-friendly sensitivity levels to a shake.Config.
 package config
 
-import "giant-cursor/internal/shake"
+import "github.com/JorgeLBJ/giant-cursor/internal/shake"
 
 // Sensitivity names how vigorous a shake must be to trigger enlargement.
 type Sensitivity string

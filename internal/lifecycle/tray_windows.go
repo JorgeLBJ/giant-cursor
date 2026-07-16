@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"giant-cursor/internal/i18n"
+	"github.com/JorgeLBJ/giant-cursor/internal/i18n"
 	"golang.org/x/sys/windows"
 )
 

@@ -11,12 +11,12 @@ import (
 	"runtime"
 	"time"
 
-	"giant-cursor/internal/control"
-	"giant-cursor/internal/cursor"
-	"giant-cursor/internal/i18n"
-	"giant-cursor/internal/input"
-	"giant-cursor/internal/lifecycle"
-	"giant-cursor/internal/shake"
+	"github.com/JorgeLBJ/giant-cursor/internal/control"
+	"github.com/JorgeLBJ/giant-cursor/internal/cursor"
+	"github.com/JorgeLBJ/giant-cursor/internal/i18n"
+	"github.com/JorgeLBJ/giant-cursor/internal/input"
+	"github.com/JorgeLBJ/giant-cursor/internal/lifecycle"
+	"github.com/JorgeLBJ/giant-cursor/internal/shake"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -128,6 +128,7 @@ func main() {
 	scale := flag.Int("scale", 4, "cursor enlargement factor")
 	sens := flag.String("sensitivity", "medium", "shake sensitivity: low|medium|high")
 	hold := flag.Int64("hold-ms", 1000, "milliseconds to stay enlarged after the last shake")
+	lang := flag.String("lang", "", "tray menu language: en|es (default: auto-detect from Windows)")
 	install := flag.Bool("install", false, "enable autostart and save settings, then run")
 	uninstall := flag.Bool("uninstall", false, "disable autostart, restore cursors, and exit")
 	restore := flag.Bool("restore", false, "restore cursors and exit (panic button)")
@@ -171,6 +172,8 @@ func main() {
 			s.Sensitivity = *sens
 		case "hold-ms":
 			s.HoldMillis = *hold
+		case "lang":
+			s.Lang = *lang
 		}
 	})
 
