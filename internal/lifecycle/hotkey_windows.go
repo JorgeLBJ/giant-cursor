@@ -17,10 +17,10 @@ var (
 )
 
 const (
-	modAlt     = 0x0001 // MOD_ALT
 	modControl = 0x0002 // MOD_CONTROL
+	modShift   = 0x0004 // MOD_SHIFT
 	wmHotkey   = 0x0312 // WM_HOTKEY
-	vkQ        = 0x51   // 'Q'
+	vkF12      = 0x7B   // VK_F12
 )
 
 type winMsg struct {
@@ -32,12 +32,12 @@ type winMsg struct {
 	pt      struct{ X, Y int32 }
 }
 
-// RunHotkeyLoop registers Ctrl+Alt+Q and blocks, pumping messages, until the
-// hotkey fires (then it calls onExit and returns) or GetMessage fails. Call
+// RunHotkeyLoop registers Ctrl+Shift+F12 and blocks, pumping messages, until
+// the hotkey fires (then it calls onExit and returns) or GetMessage fails. Call
 // runtime.LockOSThread() on the calling goroutine first: the message queue is
 // thread-specific.
 func RunHotkeyLoop(onExit func()) {
-	procRegisterHK.Call(0, 1, modControl|modAlt, vkQ)
+	procRegisterHK.Call(0, 1, modControl|modShift, vkF12)
 	var m winMsg
 	for {
 		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
