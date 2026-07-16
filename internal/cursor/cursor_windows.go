@@ -57,7 +57,17 @@ const (
 	baseSizeValue  = "CursorBaseSize"
 
 	ocrNormal = 32512 // OCR_NORMAL (the arrow)
+	ocrHand   = 32649 // OCR_HAND (links and buttons)
 )
+
+// crispArt maps a system cursor to the high-resolution artwork that replaces it
+// in StyleCrisp. Cursors without artwork fall back to upscaling the system one.
+// To add one: drop the art in assets/cursor-raw/, run `go run ./cmd/genarrow`,
+// and add the entry here.
+var crispArt = map[uintptr]*artwork{
+	ocrNormal: arrowArt,
+	ocrHand:   handArt,
+}
 
 type bitmapInfoHeader struct {
 	Size          uint32
@@ -157,8 +167,8 @@ func (w *Win32) Enlarge() error {
 	n := 0
 	for _, id := range systemCursorIDs {
 		var h uintptr
-		if w.style == StyleCrisp && id == ocrNormal {
-			h = makeArrowCursor(cx) // custom crisp high-contrast arrow
+		if art, ok := crispArt[id]; ok && w.style == StyleCrisp {
+			h = makeArtCursor(art, cx) // crisp high-resolution artwork
 		} else {
 			h = loadBigCursor(id, cx, cy) // upscaled system cursor
 		}
@@ -192,10 +202,10 @@ func applyNativeSize(px int) error {
 	return nil
 }
 
-// makeArrowCursor builds a crisp, high-contrast arrow HCURSOR at the given size
-// from a self-rendered bitmap (hotspot at the tip). Returns 0 on failure.
-func makeArrowCursor(size int) uintptr {
-	bgra := rasterizeArrow(size)
+// makeArtCursor builds a crisp HCURSOR at the given size from high-resolution
+// artwork, with the hotspot at its detected tip. Returns 0 on failure.
+func makeArtCursor(art *artwork, size int) uintptr {
+	bgra, hotX, hotY := art.bitmap(size)
 
 	bi := bitmapInfoHeader{
 		Size:     40,
@@ -216,7 +226,7 @@ func makeArrowCursor(size int) uintptr {
 	maskBits := make([]byte, maskStride*size) // all zero = fully opaque (alpha rules)
 	mask, _, _ := procCreateBitmap.Call(uintptr(size), uintptr(size), 1, 1, uintptr(unsafe.Pointer(&maskBits[0])))
 
-	ii := iconInfo{fIcon: 0, hbmMask: mask, hbmColor: dib}
+	ii := iconInfo{fIcon: 0, xHotspot: uint32(hotX), yHotspot: uint32(hotY), hbmMask: mask, hbmColor: dib}
 	hcur, _, _ := procCreateIconIndir.Call(uintptr(unsafe.Pointer(&ii)))
 
 	procDeleteObject.Call(dib)

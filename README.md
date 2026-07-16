@@ -48,7 +48,7 @@ Everything is configurable live, no restart:
 
 | Menu | Options |
 |---|---|
-| **Cursor** | `Crisp arrow` (sharp custom pointer) or `System (zoom)` (your real cursor, enlarged) |
+| **Cursor** | `Crisp arrow` — sharp high-resolution pointer and hand — or `System (zoom)` — your real cursors, enlarged |
 | **Size** | 2x, 3x, **4x** (default), 5x, 6x, 8x |
 | **Sensitivity** | Low, **Medium** (default), High — how hard you must shake |
 | **Enlarged for** | Short (0.7s), **Normal (1s)**, Long (1.5s) |
@@ -93,6 +93,9 @@ Settings live in `%LOCALAPPDATA%\giant-cursor\config.json`.
   **shake** as several rapid direction reversals within a short window.
 - On a shake it calls `SetSystemCursor` to swap the standard cursors for
   enlarged ones; after ~1s with no further shake it reloads your cursor scheme.
+- `Crisp arrow` mode replaces the pointer and the hand with **high-resolution
+  artwork scaled down** to the chosen size. Downscaling stays sharp — the
+  blurriness of other tools comes from upscaling the 32px system cursors.
 - The shake-detection logic is pure and fully unit-tested; Windows sits behind
   small adapters (hexagonal architecture).
 
@@ -113,19 +116,27 @@ Release build (no console window):
 go build -ldflags "-H=windowsgui -s -w" -o giant-cursor.exe ./cmd/giant-cursor
 ```
 
-Regenerate the icon from `assets/icon-source.png`, and the installer:
+Regenerate the assets and the installer:
 
 ```bash
-go run ./cmd/genicon                # -> assets/giant-cursor.ico + embedded copy
-iscc installer\giant-cursor.iss     # -> installer/Output/GiantCursorSetup.exe
+go run ./cmd/genicon                # app icon  <- assets/icon-source.png
+go run ./cmd/genarrow               # cursors   <- assets/cursor-raw/*.png
+iscc installer\giant-cursor.iss     # installer -> installer/Output/GiantCursorSetup.exe
 ```
+
+To restyle a cursor, replace its art in `assets/cursor-raw/` (white shape with a
+black outline on a blue background — the blue is keyed out automatically) and
+re-run `go run ./cmd/genarrow`. No code changes needed.
 
 ## Known limitations
 
 - Only **standard system cursors** are enlarged. Apps with a fully custom
   cursor (some games and design tools) are not affected.
-- `System (zoom)` mode looks slightly soft, because it upscales the 32px system
-  cursor. Use `Crisp arrow` for a sharp pointer at any size.
+- In `Crisp arrow` mode only the **pointer and the hand** use high-resolution
+  artwork — the ones you see almost all the time. The remaining cursors (text
+  caret, resize handles, busy…) are upscaled and therefore softer.
+- `System (zoom)` mode is soft across the board, because Windows only ships its
+  cursors at 32px. It is there for when you prefer your exact system cursors.
 
 ## Contributing
 
