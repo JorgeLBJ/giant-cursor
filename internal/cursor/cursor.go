@@ -8,6 +8,20 @@ const (
 	MaxBaseSize     = 256
 )
 
+// Style selects how the cursor is enlarged.
+type Style string
+
+const (
+	// StyleCrisp draws a custom high-resolution arrow (sharp at any size).
+	StyleCrisp Style = "crisp"
+	// StyleSystem upscales the user's actual system cursors (softer, but keeps
+	// every cursor shape exactly as the user has it).
+	StyleSystem Style = "system"
+	// StyleNative asks Windows to render its own cursors at a large base size
+	// (crisp, identical to the user's real cursors) where the OS supports it.
+	StyleNative Style = "native"
+)
+
 // Enlarger swaps the system cursors to enlarged copies and restores them.
 type Enlarger interface {
 	Enlarge() error
