@@ -19,11 +19,16 @@ var arrowPolygon = [][2]float64{
 // outline that straddles the silhouette (so thin parts keep their white core,
 // like the real cursor). It returns a top-down 32bpp premultiplied BGRA buffer
 // (size*size*4 bytes). The hotspot is the tip (0,0).
+// arrowFill is the fraction of the bitmap the arrow occupies. The real Windows
+// arrow fills only ~62% of its cursor box (the rest is padding), so matching it
+// keeps our crisp arrow the same visual size as the upscaled system cursor.
+const arrowFill = 0.62
+
 func rasterizeArrow(size int) []byte {
 	if size < 1 {
 		size = 1
 	}
-	scale := float64(size - 1)
+	scale := float64(size-1) * arrowFill
 	poly := make([][2]float64, len(arrowPolygon))
 	for i, p := range arrowPolygon {
 		poly[i] = [2]float64{p[0] * scale, p[1] * scale}
@@ -31,9 +36,9 @@ func rasterizeArrow(size int) []byte {
 
 	// Outline half-width: the black rim extends this far on each side of the
 	// silhouette edge, giving a clean thin outline that never eats the interior.
-	half := float64(size) * 0.030
-	if half < 1.2 {
-		half = 1.2
+	half := float64(size) * 0.018
+	if half < 1 {
+		half = 1
 	}
 
 	const ss = 4 // supersampling per axis for anti-aliasing

@@ -12,12 +12,12 @@ func TestRasterizeArrowShape(t *testing.T) {
 	redAt := func(x, y int) byte { return buf[(y*size+x)*4+2] }
 
 	// Near the tip the arrow is opaque.
-	if alphaAt(1, 3) == 0 {
+	if alphaAt(1, 2) == 0 {
 		t.Errorf("expected opaque near tip, got transparent")
 	}
 	// A point well inside the head is white (high red) and opaque.
-	if a, r := alphaAt(10, 25), redAt(10, 25); a == 0 || r < 100 {
-		t.Errorf("expected white interior at (10,25): alpha=%d red=%d", a, r)
+	if a, r := alphaAt(4, 18), redAt(4, 18); a == 0 || r < 100 {
+		t.Errorf("expected white interior at (4,18): alpha=%d red=%d", a, r)
 	}
 	// The bottom-right corner is outside the arrow (transparent).
 	if a := alphaAt(size-1, size-1); a != 0 {
