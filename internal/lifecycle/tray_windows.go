@@ -3,6 +3,7 @@
 package lifecycle
 
 import (
+	"encoding/binary"
 	"fmt"
 	"unsafe"
 
@@ -20,6 +21,7 @@ var (
 	procDefWindowProc    = user32t.NewProc("DefWindowProcW")
 	procDestroyWindow    = user32t.NewProc("DestroyWindow")
 	procLoadIcon         = user32t.NewProc("LoadIconW")
+	procCreateIconFromRes = user32t.NewProc("CreateIconFromResourceEx")
 	procGetModuleHandle  = kernel32t.NewProc("GetModuleHandleW")
 	procCreatePopupMenu  = user32t.NewProc("CreatePopupMenu")
 	procAppendMenu       = user32t.NewProc("AppendMenuW")
@@ -74,6 +76,7 @@ const (
 // menu can be shown in the user's language.
 type TrayCallbacks struct {
 	Strings func() i18n.Strings
+	IconICO []byte // raw .ico bytes for the tray icon (falls back to a stock icon)
 
 	Styles        []string // e.g. ["crisp","system"]
 	Scales        []int    // e.g. [2,3,4,5,6,8]
@@ -170,7 +173,10 @@ func RunTray(cb TrayCallbacks) error {
 	}
 	trayHwnd = hwnd
 
-	hicon, _, _ := procLoadIcon.Call(0, idiApplication)
+	hicon := iconFromICO(trayCB.IconICO)
+	if hicon == 0 {
+		hicon, _, _ = procLoadIcon.Call(0, idiApplication)
+	}
 
 	trayNID = notifyIconData{
 		hWnd:             hwnd,
@@ -195,6 +201,52 @@ func RunTray(cb TrayCallbacks) error {
 
 	procShellNotifyIcon.Call(nimDelete, uintptr(unsafe.Pointer(&trayNID)))
 	return nil
+}
+
+// iconFromICO creates an HICON from raw .ico bytes, picking the entry closest
+// to a small-icon size. Returns 0 on any problem so the caller can fall back.
+func iconFromICO(data []byte) uintptr {
+	const want = 32
+	if len(data) < 6 {
+		return 0
+	}
+	count := int(binary.LittleEndian.Uint16(data[4:]))
+	best, bestDiff := -1, 1<<30
+	for i := 0; i < count; i++ {
+		e := 6 + i*16
+		if e+16 > len(data) {
+			break
+		}
+		w := int(data[e])
+		if w == 0 {
+			w = 256
+		}
+		if d := abs(w - want); d < bestDiff {
+			bestDiff, best = d, i
+		}
+	}
+	if best < 0 {
+		return 0
+	}
+	e := 6 + best*16
+	size := binary.LittleEndian.Uint32(data[e+8:])
+	offset := binary.LittleEndian.Uint32(data[e+12:])
+	if offset == 0 || size == 0 || int(offset+size) > len(data) {
+		return 0
+	}
+	img := data[offset : offset+size]
+	h, _, _ := procCreateIconFromRes.Call(
+		uintptr(unsafe.Pointer(&img[0])), uintptr(len(img)),
+		1, 0x00030000, want, want, 0,
+	)
+	return h
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {

@@ -2,6 +2,7 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -27,6 +28,9 @@ const (
 	runKeyPath   = `Software\Microsoft\Windows\CurrentVersion\Run`
 	pollInterval = 8 * time.Millisecond
 )
+
+//go:embed appicon.ico
+var appICO []byte
 
 type settings struct {
 	Scale       int    `json:"scale"`
@@ -214,6 +218,7 @@ func main() {
 
 	cb := lifecycle.TrayCallbacks{
 		Strings:       func() i18n.Strings { return i18n.For(s.Lang) },
+		IconICO:       appICO,
 		Styles:        []string{string(cursor.StyleCrisp), string(cursor.StyleSystem)},
 		Scales:        []int{2, 3, 4, 5, 6, 8},
 		Sensitivities: []string{"low", "medium", "high"},
