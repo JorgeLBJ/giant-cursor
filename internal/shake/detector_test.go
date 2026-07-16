@@ -60,3 +60,36 @@ func TestDiagonalShakeTriggersBig(t *testing.T) {
 		t.Fatalf("want BIG for diagonal shake, got %v", got)
 	}
 }
+
+func TestIdleReturnsToNormal(t *testing.T) {
+	d := New(shakeCfg())
+	feed(d, []int32{0, 30, 0, 30, 0, 30, 0}, []int32{0, 0, 0, 0, 0, 0, 0}, 20)
+	if d.State() != StateBig {
+		t.Fatalf("precondition failed: want BIG, got %v", d.State())
+	}
+	// Hold still well past IdleMillis (1000ms): same position, later timestamp.
+	st := d.Update(Sample{Pos: d.lastPos, Millis: 10000})
+	if st != StateNormal {
+		t.Fatalf("want NORMAL after idle, got %v", st)
+	}
+}
+
+func TestContinuedMovementKeepsBig(t *testing.T) {
+	d := New(shakeCfg())
+	feed(d, []int32{0, 30, 0, 30, 0, 30, 0}, []int32{0, 0, 0, 0, 0, 0, 0}, 20)
+	if d.State() != StateBig {
+		t.Fatalf("precondition failed: want BIG, got %v", d.State())
+	}
+	// Keep moving > IdleMoveThresh with time steps < IdleMillis.
+	var ms int64 = 200
+	var x int32
+	st := d.State()
+	for i := 0; i < 20; i++ {
+		x += 10
+		ms += 50
+		st = d.Update(Sample{Pos: Point{X: x}, Millis: ms})
+	}
+	if st != StateBig {
+		t.Fatalf("want BIG while still moving, got %v", st)
+	}
+}

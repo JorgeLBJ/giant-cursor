@@ -88,9 +88,17 @@ func (d *Detector) Update(s Sample) State {
 		d.samples = d.samples[drop:]
 	}
 
-	if d.state == StateNormal && d.reversals() >= d.cfg.MinReversals {
-		d.state = StateBig
-		d.samples = d.samples[:0] // require a fresh shake next time
+	switch d.state {
+	case StateNormal:
+		if d.reversals() >= d.cfg.MinReversals {
+			d.state = StateBig
+			d.samples = d.samples[:0] // require a fresh shake next time
+		}
+	case StateBig:
+		if s.Millis-d.lastMoveMillis >= d.cfg.IdleMillis {
+			d.state = StateNormal
+			d.samples = d.samples[:0]
+		}
 	}
 	return d.state
 }
