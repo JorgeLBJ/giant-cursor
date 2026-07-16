@@ -10,8 +10,7 @@ import (
 	"runtime"
 	"time"
 
-	"giant-cursor/internal/app"
-	"giant-cursor/internal/config"
+	"giant-cursor/internal/control"
 	"giant-cursor/internal/cursor"
 	"giant-cursor/internal/input"
 	"giant-cursor/internal/lifecycle"
@@ -91,6 +90,16 @@ func setAutostart(enabled bool) error {
 	return k.SetStringValue(appName, fmt.Sprintf("%q --silent", exe))
 }
 
+func autostartEnabled() bool {
+	k, err := registry.OpenKey(registry.CURRENT_USER, runKeyPath, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer k.Close()
+	_, _, err = k.GetStringValue(appName)
+	return err == nil
+}
+
 func main() {
 	scale := flag.Int("scale", 4, "cursor enlargement factor")
 	sens := flag.String("sensitivity", "medium", "shake sensitivity: low|medium|high")
@@ -138,13 +147,12 @@ func main() {
 			s.HoldMillis = *hold
 		}
 	})
+
 	// Capture the user's normal cursor size once, then persist it so a crash
 	// that left the cursor enlarged can always be undone on the next launch.
 	if s.BaseSize <= 0 {
 		s.BaseSize = cursor.CurrentBaseSize()
 	}
-	cur := cursor.NewWin32(s.Scale, s.BaseSize)
-
 	if err := saveSettings(s); err != nil {
 		fmt.Fprintln(os.Stderr, "save settings failed:", err)
 	}
@@ -154,31 +162,64 @@ func main() {
 		}
 	}
 
+	normal := s.BaseSize
+	newEnlarger := func(scale int) cursor.Enlarger { return cursor.NewWin32(scale, normal) }
+
+	ctrl := control.New(
+		control.Settings{Scale: s.Scale, Sensitivity: s.Sensitivity, HoldMillis: s.HoldMillis},
+		newEnlarger,
+		func(ns control.Settings) {
+			s.Scale, s.Sensitivity, s.HoldMillis = ns.Scale, ns.Sensitivity, ns.HoldMillis
+			_ = saveSettings(s)
+		},
+	)
+
 	// SAFETY: clean baseline first, so a previous crash that left the cursor
 	// enlarged is fixed simply by launching again.
-	_ = cur.Restore()
+	_ = ctrl.Restore()
 
-	det := shake.New(config.ShakeConfig(config.Sensitivity(s.Sensitivity), s.HoldMillis))
-	application := app.New(det, cur)
 	poller := input.NewWin32Poller()
-
 	done := make(chan struct{})
-	cleanup := func() { _ = cur.Restore() }
-	lifecycle.OnConsoleClose(cleanup)
+	go runLoop(ctrl, poller, done)
 
-	fmt.Printf("Giant Cursor running (scale=%d, sensitivity=%s, hold=%dms). Shake to enlarge. Ctrl+Shift+F12 to quit.\n",
+	lifecycle.OnConsoleClose(func() { _ = ctrl.Restore() })
+
+	fmt.Printf("Giant Cursor running (scale=%d, sensitivity=%s, hold=%dms). "+
+		"Shake to enlarge. Right-click the tray icon to configure or quit.\n",
 		s.Scale, s.Sensitivity, s.HoldMillis)
 
-	go runLoop(application, poller, done)
+	cb := lifecycle.TrayCallbacks{
+		Scales:        []int{2, 3, 4, 5, 6, 8},
+		Sensitivities: []string{"low", "medium", "high"},
+		Holds: []lifecycle.HoldOption{
+			{Label: "Short (0.7s)", Millis: 700},
+			{Label: "Normal (1s)", Millis: 1000},
+			{Label: "Long (1.5s)", Millis: 1500},
+		},
+		CurrentScale:       func() int { return ctrl.Get().Scale },
+		CurrentSensitivity: func() string { return ctrl.Get().Sensitivity },
+		CurrentHold:        func() int64 { return ctrl.Get().HoldMillis },
+		AutostartOn:        autostartEnabled,
+		OnScale:            ctrl.SetScale,
+		OnSensitivity:      ctrl.SetSensitivity,
+		OnHold:             ctrl.SetHold,
+		OnToggleAutostart: func() {
+			_ = setAutostart(!autostartEnabled())
+		},
+		OnQuit: func() {
+			close(done)
+			_ = ctrl.Restore()
+		},
+	}
 
 	runtime.LockOSThread()
-	lifecycle.RunHotkeyLoop(func() {
-		close(done)
-		cleanup()
-	})
+	if err := lifecycle.RunTray(cb); err != nil {
+		fmt.Fprintln(os.Stderr, "tray failed:", err)
+		_ = ctrl.Restore()
+	}
 }
 
-func runLoop(a *app.App, poller input.PositionSource, done <-chan struct{}) {
+func runLoop(ctrl *control.Controller, poller input.PositionSource, done <-chan struct{}) {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	start := time.Now()
@@ -191,7 +232,7 @@ func runLoop(a *app.App, poller input.PositionSource, done <-chan struct{}) {
 			if err != nil {
 				continue
 			}
-			_ = a.Step(shake.Sample{Pos: pos, Millis: time.Since(start).Milliseconds()})
+			_ = ctrl.Step(shake.Sample{Pos: pos, Millis: time.Since(start).Milliseconds()})
 		}
 	}
 }
