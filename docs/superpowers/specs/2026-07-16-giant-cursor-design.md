@@ -32,7 +32,9 @@ tool for everyone.
 ### Success criteria
 
 - Shaking the mouse enlarges the **actual system cursor** (default 4x).
-- The cursor stays enlarged while moving and returns to normal after ~1s idle.
+- The cursor stays enlarged for a short hold (~1s) after the last shake, then
+  returns to normal even if the mouse keeps moving — plain movement must not
+  keep it enlarged.
 - Negligible CPU/memory footprint; works reliably even with many apps open.
 - Never leaves the cursor stuck enlarged, even after a crash or forced kill.
 - Easy to install (portable `.exe` + a friendly installer) and well documented.
@@ -67,15 +69,19 @@ restoring individual handles.
 ### 3.3 State machine
 
 ```
-NORMAL ──(shake detected)──► BIG ──(idle ~1s)──► NORMAL
+NORMAL ──(shake detected)──► BIG ──(no shake for ~1s hold)──► NORMAL
 ```
 
 - **Shake detection:** keep a short ring buffer of recent (position, timestamp)
   samples; count direction reversals on the X and Y axes within a sliding window
   (~400 ms) above a minimum speed threshold. Crossing the reversal threshold
   triggers the transition to BIG. Sensitivity is configurable.
-- **Idle detection:** while BIG, if the cursor does not move beyond a small
-  threshold for ~1 s, transition back to NORMAL.
+- **Hold detection:** entering BIG arms a hold timer. While BIG, each new shake
+  re-arms it; once `HoldMillis` (~1s) pass with no further shake, transition
+  back to NORMAL. Smooth movement does NOT re-arm the timer, so ordinary use
+  after locating the cursor shrinks it back promptly. (This replaced an earlier
+  "shrink when the mouse stops moving" rule, which kept the cursor enlarged
+  during normal use — found in smoke testing.)
 
 ## 4. Architecture
 
@@ -88,7 +94,7 @@ giant-cursor/
 ├─ cmd/giant-cursor/
 │  └─ main.go                     # flags, lifecycle wiring, message loop
 ├─ internal/shake/
-│  ├─ detector.go                 # PURE domain: shake + idle detection
+│  ├─ detector.go                 # PURE domain: shake + hold detection
 │  └─ detector_test.go            # golden cases (TDD)
 ├─ internal/cursor/
 │  ├─ cursor.go                   # Enlarger port (interface)
@@ -99,7 +105,7 @@ giant-cursor/
 ├─ internal/app/
 │  └─ app.go                      # state machine: wires detector + input + cursor
 ├─ internal/lifecycle/
-│  ├─ hotkey_windows.go           # RegisterHotKey (Ctrl+Alt+Q) + message loop
+│  ├─ hotkey_windows.go           # RegisterHotKey (Ctrl+Shift+F12) + message loop
 │  ├─ instance_windows.go         # single-instance named mutex
 │  └─ cleanup_windows.go          # console/session shutdown → restore cursors
 ├─ internal/config/
@@ -167,7 +173,9 @@ dies. Mitigations (all mandatory):
 1. **Startup reset:** on launch, call `SPI_SETCURSORS` first to establish a clean
    baseline. If a previous run crashed while BIG, simply relaunching fixes it.
 2. **Clean-restore path:** restore always uses `SPI_SETCURSORS`.
-3. **Clean exit via hotkey:** `Ctrl+Alt+Q` restores cursors and exits.
+3. **Clean exit via hotkey:** `Ctrl+Shift+F12` restores cursors and exits.
+   (Ctrl+Alt is avoided: on Spanish/Latin-American layouts it is AltGr and
+   collides with `@` and other characters.)
 4. **Extra shutdown hooks:** `SetConsoleCtrlHandler` and
    `WM_QUERYENDSESSION`/`WM_ENDSESSION` restore where the OS gives us a chance.
 5. **Panic button:** `giant-cursor.exe --restore` restores cursors and exits.
@@ -184,8 +192,8 @@ Command-line flags with sensible defaults:
 |---|---|---|
 | `--scale` | `4` | Enlargement factor. |
 | `--sensitivity` | `medium` | Shake sensitivity (`low`/`medium`/`high`). |
-| `--idle-ms` | `1000` | Idle time before shrinking back. |
-| `--hotkey` | `ctrl+alt+q` | Clean-exit hotkey. |
+| `--hold-ms` | `1000` | Time to stay enlarged after the last shake. |
+| `--hotkey` | `ctrl+shift+f12` | Clean-exit hotkey (fixed in v1). |
 
 Lifecycle flags:
 
@@ -222,7 +230,7 @@ sequences of `(position, timestamp)` samples. Golden cases:
 - Slow drift does **not** trigger.
 - Diagonal shake **triggers**.
 - Sensitivity thresholds behave monotonically (higher sensitivity → easier trigger).
-- After BIG, an idle gap ≥ `idle-ms` returns to NORMAL; continued movement keeps BIG.
+- After BIG, `hold-ms` with no further shake returns to NORMAL; continued shaking keeps BIG; smooth movement does NOT keep BIG.
 
 The Win32 adapters (`cursor_windows.go`, `input/poller_windows.go`) are thin and
 verified manually on Windows. Ports allow the domain tests to run with fake
