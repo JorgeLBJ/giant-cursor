@@ -12,10 +12,12 @@ import (
 
 	"giant-cursor/internal/control"
 	"giant-cursor/internal/cursor"
+	"giant-cursor/internal/i18n"
 	"giant-cursor/internal/input"
 	"giant-cursor/internal/lifecycle"
 	"giant-cursor/internal/shake"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -31,7 +33,18 @@ type settings struct {
 	Sensitivity string `json:"sensitivity"`
 	HoldMillis  int64  `json:"hold_ms"`
 	Style       string `json:"style"`
+	Lang        string `json:"lang"`
 	BaseSize    int    `json:"base_cursor_size"` // user's normal cursor size (px)
+}
+
+// defaultLang returns "es" when the Windows UI language is Spanish, else "en".
+func defaultLang() string {
+	proc := windows.NewLazySystemDLL("kernel32.dll").NewProc("GetUserDefaultUILanguage")
+	r, _, _ := proc.Call()
+	if r&0x3FF == 0x0A { // LANG_SPANISH
+		return "es"
+	}
+	return "en"
 }
 
 func configPath() string {
@@ -59,6 +72,9 @@ func loadSettings(def settings) settings {
 	}
 	if s.Style == "" {
 		s.Style = def.Style
+	}
+	if s.Lang == "" {
+		s.Lang = def.Lang
 	}
 	return s
 }
@@ -141,7 +157,7 @@ func main() {
 	}
 	defer release()
 
-	s := loadSettings(settings{Scale: *scale, Sensitivity: *sens, HoldMillis: *hold, Style: string(cursor.StyleCrisp)})
+	s := loadSettings(settings{Scale: *scale, Sensitivity: *sens, HoldMillis: *hold, Style: string(cursor.StyleCrisp), Lang: defaultLang()})
 	// Explicit flags override the config file.
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -197,26 +213,26 @@ func main() {
 		s.Scale, s.Sensitivity, s.HoldMillis)
 
 	cb := lifecycle.TrayCallbacks{
-		Styles: []lifecycle.StyleOption{
-			{Label: "Crisp arrow", Value: string(cursor.StyleCrisp)},
-			{Label: "System (zoom)", Value: string(cursor.StyleSystem)},
-		},
+		Strings:       func() i18n.Strings { return i18n.For(s.Lang) },
+		Styles:        []string{string(cursor.StyleCrisp), string(cursor.StyleSystem)},
 		Scales:        []int{2, 3, 4, 5, 6, 8},
 		Sensitivities: []string{"low", "medium", "high"},
-		Holds: []lifecycle.HoldOption{
-			{Label: "Short (0.7s)", Millis: 700},
-			{Label: "Normal (1s)", Millis: 1000},
-			{Label: "Long (1.5s)", Millis: 1500},
-		},
+		Holds:         []int64{700, 1000, 1500},
+		Langs:         []string{"en", "es"},
 		CurrentStyle:       func() string { return ctrl.Get().Style },
 		CurrentScale:       func() int { return ctrl.Get().Scale },
 		CurrentSensitivity: func() string { return ctrl.Get().Sensitivity },
 		CurrentHold:        func() int64 { return ctrl.Get().HoldMillis },
+		CurrentLang:        func() string { return s.Lang },
 		AutostartOn:        autostartEnabled,
 		OnStyle:            ctrl.SetStyle,
 		OnScale:            ctrl.SetScale,
 		OnSensitivity:      ctrl.SetSensitivity,
 		OnHold:             ctrl.SetHold,
+		OnLang: func(code string) {
+			s.Lang = code
+			_ = saveSettings(s)
+		},
 		OnToggleAutostart: func() {
 			_ = setAutostart(!autostartEnabled())
 		},

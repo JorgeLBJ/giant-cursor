@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"giant-cursor/internal/i18n"
 	"golang.org/x/sys/windows"
 )
 
@@ -64,38 +65,34 @@ const (
 	idHoldBase        = 300 // idHoldBase + index
 	idToggleAutostart = 400
 	idStyleBase       = 500 // idStyleBase + index
+	idLangBase        = 600 // idLangBase + index
 	idQuit            = 900
 )
 
-// HoldOption is one entry in the hold-time submenu.
-type HoldOption struct {
-	Label  string
-	Millis int64
-}
-
-// StyleOption is one entry in the cursor-style submenu.
-type StyleOption struct {
-	Label string
-	Value string
-}
-
-// TrayCallbacks describe the menu contents and the actions for each item.
+// TrayCallbacks describe the menu contents and the actions for each item. The
+// value lists carry the stable option values; labels come from Strings so the
+// menu can be shown in the user's language.
 type TrayCallbacks struct {
-	Styles        []StyleOption
-	Scales        []int
-	Sensitivities []string
-	Holds         []HoldOption
+	Strings func() i18n.Strings
+
+	Styles        []string // e.g. ["crisp","system"]
+	Scales        []int    // e.g. [2,3,4,5,6,8]
+	Sensitivities []string // e.g. ["low","medium","high"]
+	Holds         []int64  // e.g. [700,1000,1500]
+	Langs         []string // e.g. ["en","es"]
 
 	CurrentStyle       func() string
 	CurrentScale       func() int
 	CurrentSensitivity func() string
 	CurrentHold        func() int64
+	CurrentLang        func() string
 	AutostartOn        func() bool
 
 	OnStyle           func(value string)
 	OnScale           func(scale int)
 	OnSensitivity     func(name string)
 	OnHold            func(ms int64)
+	OnLang            func(code string)
 	OnToggleAutostart func()
 	OnQuit            func()
 }
@@ -216,61 +213,64 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	return r
 }
 
+func createSub() uintptr {
+	m, _, _ := procCreatePopupMenu.Call()
+	return m
+}
+
+func checkFlag(on bool) uintptr {
+	if on {
+		return mfString | mfChecked
+	}
+	return mfString
+}
+
+func labelAt(labels []string, i int, fallback string) string {
+	if i >= 0 && i < len(labels) {
+		return labels[i]
+	}
+	return fallback
+}
+
 func showMenu(hwnd uintptr) {
+	s := trayCB.Strings()
 	menu, _, _ := procCreatePopupMenu.Call()
 
-	styleMenu, _, _ := procCreatePopupMenu.Call()
-	curStyle := trayCB.CurrentStyle()
-	for i, st := range trayCB.Styles {
-		flags := uintptr(mfString)
-		if st.Value == curStyle {
-			flags |= mfChecked
-		}
-		appendMenu(styleMenu, flags, uintptr(idStyleBase+i), st.Label)
+	styleMenu := createSub()
+	for i, v := range trayCB.Styles {
+		appendMenu(styleMenu, checkFlag(v == trayCB.CurrentStyle()), uintptr(idStyleBase+i), labelAt(s.Styles, i, v))
 	}
-	appendMenu(menu, mfString|mfPopup, styleMenu, "Cursor")
+	appendMenu(menu, mfString|mfPopup, styleMenu, s.MenuCursor)
 
-	scaleMenu, _, _ := procCreatePopupMenu.Call()
+	scaleMenu := createSub()
 	curScale := trayCB.CurrentScale()
-	for _, s := range trayCB.Scales {
-		flags := uintptr(mfString)
-		if s == curScale {
-			flags |= mfChecked
-		}
-		appendMenu(scaleMenu, flags, uintptr(idScaleBase+s), fmt.Sprintf("%dx", s))
+	for _, sc := range trayCB.Scales {
+		appendMenu(scaleMenu, checkFlag(sc == curScale), uintptr(idScaleBase+sc), fmt.Sprintf("%dx", sc))
 	}
-	appendMenu(menu, mfString|mfPopup, scaleMenu, "Size")
+	appendMenu(menu, mfString|mfPopup, scaleMenu, s.MenuSize)
 
-	sensMenu, _, _ := procCreatePopupMenu.Call()
-	curSens := trayCB.CurrentSensitivity()
-	for i, name := range trayCB.Sensitivities {
-		flags := uintptr(mfString)
-		if name == curSens {
-			flags |= mfChecked
-		}
-		appendMenu(sensMenu, flags, uintptr(idSensBase+i), title(name))
+	sensMenu := createSub()
+	for i, v := range trayCB.Sensitivities {
+		appendMenu(sensMenu, checkFlag(v == trayCB.CurrentSensitivity()), uintptr(idSensBase+i), labelAt(s.Sensitivities, i, v))
 	}
-	appendMenu(menu, mfString|mfPopup, sensMenu, "Sensitivity")
+	appendMenu(menu, mfString|mfPopup, sensMenu, s.MenuSensitivity)
 
-	holdMenu, _, _ := procCreatePopupMenu.Call()
+	holdMenu := createSub()
 	curHold := trayCB.CurrentHold()
-	for i, h := range trayCB.Holds {
-		flags := uintptr(mfString)
-		if h.Millis == curHold {
-			flags |= mfChecked
-		}
-		appendMenu(holdMenu, flags, uintptr(idHoldBase+i), h.Label)
+	for i, v := range trayCB.Holds {
+		appendMenu(holdMenu, checkFlag(v == curHold), uintptr(idHoldBase+i), labelAt(s.Holds, i, ""))
 	}
-	appendMenu(menu, mfString|mfPopup, holdMenu, "Big for")
+	appendMenu(menu, mfString|mfPopup, holdMenu, s.MenuHold)
 
-	autostartFlags := uintptr(mfString)
-	if trayCB.AutostartOn() {
-		autostartFlags |= mfChecked
+	langMenu := createSub()
+	for i, v := range trayCB.Langs {
+		appendMenu(langMenu, checkFlag(v == trayCB.CurrentLang()), uintptr(idLangBase+i), labelAt(s.Langs, i, v))
 	}
-	appendMenu(menu, autostartFlags, idToggleAutostart, "Start with Windows")
+	appendMenu(menu, mfString|mfPopup, langMenu, s.MenuLanguage)
 
+	appendMenu(menu, checkFlag(trayCB.AutostartOn()), idToggleAutostart, s.Autostart)
 	appendMenu(menu, mfSeparator, 0, "")
-	appendMenu(menu, mfString, idQuit, "Quit Giant Cursor")
+	appendMenu(menu, mfString, idQuit, s.Quit)
 
 	var pt struct{ X, Y int32 }
 	procGetCursorPosT.Call(uintptr(unsafe.Pointer(&pt)))
@@ -287,10 +287,15 @@ func showMenu(hwnd uintptr) {
 
 func dispatch(id int) {
 	switch {
-	case id >= idStyleBase && id < idStyleBase+100:
+	case id >= idStyleBase && id < idLangBase:
 		i := id - idStyleBase
 		if i >= 0 && i < len(trayCB.Styles) {
-			trayCB.OnStyle(trayCB.Styles[i].Value)
+			trayCB.OnStyle(trayCB.Styles[i])
+		}
+	case id >= idLangBase && id < idLangBase+100:
+		i := id - idLangBase
+		if i >= 0 && i < len(trayCB.Langs) {
+			trayCB.OnLang(trayCB.Langs[i])
 		}
 	case id >= idScaleBase && id < idSensBase:
 		trayCB.OnScale(id - idScaleBase)
@@ -302,7 +307,7 @@ func dispatch(id int) {
 	case id >= idHoldBase && id < idToggleAutostart:
 		i := id - idHoldBase
 		if i >= 0 && i < len(trayCB.Holds) {
-			trayCB.OnHold(trayCB.Holds[i].Millis)
+			trayCB.OnHold(trayCB.Holds[i])
 		}
 	case id == idToggleAutostart:
 		trayCB.OnToggleAutostart()
@@ -326,11 +331,4 @@ func copyUTF16(dst []uint16, s string) {
 	if n < len(dst) {
 		dst[n-1] = 0
 	}
-}
-
-func title(s string) string {
-	if s == "" {
-		return s
-	}
-	return string(s[0]-32) + s[1:] // ASCII sensitivity names ("low"/"medium"/"high")
 }
