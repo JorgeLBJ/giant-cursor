@@ -31,6 +31,7 @@ type settings struct {
 	Scale       int    `json:"scale"`
 	Sensitivity string `json:"sensitivity"`
 	HoldMillis  int64  `json:"hold_ms"`
+	BaseSize    int    `json:"base_cursor_size"` // user's normal cursor size (px)
 }
 
 func configPath() string {
@@ -100,16 +101,17 @@ func main() {
 	_ = flag.Bool("silent", false, "reserved: run without console output")
 	flag.Parse()
 
-	cur := cursor.NewWin32(*scale)
-
 	// Panic button and uninstall must work even if another instance is running.
-	if *restore {
-		_ = cur.Restore()
-		return
-	}
-	if *uninstall {
-		_ = setAutostart(false)
-		_ = cur.Restore()
+	// Restore to the saved normal size (fall back to the OS default).
+	if *restore || *uninstall {
+		if *uninstall {
+			_ = setAutostart(false)
+		}
+		normal := loadSettings(settings{}).BaseSize
+		if normal <= 0 {
+			normal = cursor.DefaultBaseSize
+		}
+		_ = cursor.NewWin32(1, normal).Restore()
 		return
 	}
 
@@ -136,12 +138,17 @@ func main() {
 			s.HoldMillis = *hold
 		}
 	})
-	cur = cursor.NewWin32(s.Scale)
+	// Capture the user's normal cursor size once, then persist it so a crash
+	// that left the cursor enlarged can always be undone on the next launch.
+	if s.BaseSize <= 0 {
+		s.BaseSize = cursor.CurrentBaseSize()
+	}
+	cur := cursor.NewWin32(s.Scale, s.BaseSize)
 
+	if err := saveSettings(s); err != nil {
+		fmt.Fprintln(os.Stderr, "save settings failed:", err)
+	}
 	if *install {
-		if err := saveSettings(s); err != nil {
-			fmt.Fprintln(os.Stderr, "save settings failed:", err)
-		}
 		if err := setAutostart(true); err != nil {
 			fmt.Fprintln(os.Stderr, "autostart failed:", err)
 		}

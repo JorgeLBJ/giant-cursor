@@ -6,89 +6,82 @@ import (
 	"fmt"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 var (
 	user32              = windows.NewLazySystemDLL("user32.dll")
-	procLoadImageW      = user32.NewProc("LoadImageW")
-	procCopyImage       = user32.NewProc("CopyImage")
-	procSetSystemCursor = user32.NewProc("SetSystemCursor")
 	procSystemParamInfo = user32.NewProc("SystemParametersInfoW")
-	procGetSystemMetric = user32.NewProc("GetSystemMetrics")
 )
 
 const (
-	imageCursor   = 2      // IMAGE_CURSOR
-	lrDefaultSize = 0x0040 // LR_DEFAULTSIZE
-	lrShared      = 0x8000 // LR_SHARED
-	smCXCursor    = 13     // SM_CXCURSOR
-	smCYCursor    = 14     // SM_CYCURSOR
-	spiSetCursors = 0x0057 // SPI_SETCURSORS
+	spiSetCursors  = 0x0057 // SPI_SETCURSORS
+	spifUpdateIni  = 0x0001 // SPIF_UPDATEINIFILE
+	spifSendChange = 0x0002 // SPIF_SENDCHANGE
+
+	cursorsKeyPath = `Control Panel\Cursors`
+	baseSizeValue  = "CursorBaseSize"
 )
 
-// Standard system cursor ids (OCR_*). Covers the common shapes; any id the
-// system does not provide is skipped at runtime.
-var systemCursorIDs = []uintptr{
-	32512, // OCR_NORMAL
-	32513, // OCR_IBEAM
-	32514, // OCR_WAIT
-	32515, // OCR_CROSS
-	32516, // OCR_UP
-	32642, // OCR_SIZENWSE
-	32643, // OCR_SIZENESW
-	32644, // OCR_SIZEWE
-	32645, // OCR_SIZENS
-	32646, // OCR_SIZEALL
-	32648, // OCR_NO
-	32649, // OCR_HAND
-	32650, // OCR_APPSTARTING
-	32651, // OCR_HELP
+// CurrentBaseSize reads the user's current cursor base size in pixels. It
+// defaults to DefaultBaseSize (32) when the value is missing.
+func CurrentBaseSize() int {
+	k, err := registry.OpenKey(registry.CURRENT_USER, cursorsKeyPath, registry.QUERY_VALUE)
+	if err != nil {
+		return DefaultBaseSize
+	}
+	defer k.Close()
+	v, _, err := k.GetIntegerValue(baseSizeValue)
+	if err != nil || v == 0 {
+		return DefaultBaseSize
+	}
+	return int(v)
 }
 
-// Win32 enlarges the standard system cursors and restores the user's scheme.
-type Win32 struct{ scale int }
+// Win32 enlarges the cursor using the native Windows cursor-size mechanism
+// (the same one the accessibility "pointer size" slider uses), which renders
+// crisply at any size instead of upscaling a small bitmap.
+type Win32 struct {
+	scale  int
+	normal int // the user's normal base size, restored on Restore
+}
 
-// NewWin32 returns a Win32 enlarger with the given scale factor (e.g. 4).
-func NewWin32(scale int) *Win32 {
+// NewWin32 returns a Win32 enlarger. normalBaseSize is the size to return to on
+// Restore (the user's own pointer size).
+func NewWin32(scale, normalBaseSize int) *Win32 {
 	if scale < 1 {
 		scale = 1
 	}
-	return &Win32{scale: scale}
-}
-
-func metric(index uintptr) int {
-	r, _, _ := procGetSystemMetric.Call(index)
-	if r == 0 {
-		return 32
+	if normalBaseSize < 1 {
+		normalBaseSize = DefaultBaseSize
 	}
-	return int(r)
+	return &Win32{scale: scale, normal: normalBaseSize}
 }
 
-// Enlarge swaps every standard system cursor for a scaled copy. It loads the
-// shared system cursor, makes an owned scaled copy with CopyImage, and hands
-// that copy to SetSystemCursor (which takes ownership).
+// Enlarge sets the cursor base size to normal*scale (clamped).
 func (w *Win32) Enlarge() error {
-	cx := uintptr(metric(smCXCursor) * w.scale)
-	cy := uintptr(metric(smCYCursor) * w.scale)
-	for _, id := range systemCursorIDs {
-		hShared, _, _ := procLoadImageW.Call(0, id, imageCursor, 0, 0, lrShared|lrDefaultSize)
-		if hShared == 0 {
-			continue
-		}
-		hBig, _, _ := procCopyImage.Call(hShared, imageCursor, cx, cy, 0)
-		if hBig == 0 {
-			continue
-		}
-		procSetSystemCursor.Call(hBig, id)
-	}
-	return nil
+	return applyBaseSize(EnlargedSize(w.normal, w.scale))
 }
 
-// Restore reloads the user's configured cursor scheme.
+// Restore sets the cursor base size back to the user's normal size.
 func (w *Win32) Restore() error {
-	r, _, err := procSystemParamInfo.Call(spiSetCursors, 0, 0, 0)
+	return applyBaseSize(w.normal)
+}
+
+// applyBaseSize writes CursorBaseSize and reloads cursors so the change takes
+// effect immediately.
+func applyBaseSize(px int) error {
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, cursorsKeyPath, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	if err := k.SetDWordValue(baseSizeValue, uint32(px)); err != nil {
+		return err
+	}
+	r, _, callErr := procSystemParamInfo.Call(spiSetCursors, 0, 0, spifUpdateIni|spifSendChange)
 	if r == 0 {
-		return fmt.Errorf("SPI_SETCURSORS failed: %w", err)
+		return fmt.Errorf("SPI_SETCURSORS failed: %w", callErr)
 	}
 	return nil
 }
