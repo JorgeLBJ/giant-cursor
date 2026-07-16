@@ -30,7 +30,10 @@ even when dozens of apps are open.**
 2. Pick your language and tick **"Start with Windows"** if you want it always on.
 3. **Shake the mouse.** The cursor grows. Stop shaking and it returns to normal.
 
-Prefer no installer? Download the standalone **`giant-cursor.exe`** and run it — zero dependencies, nothing to configure.
+Prefer no installer? Download **`giant-cursor-portable.exe`** and run it — zero dependencies, nothing to configure.
+
+> **"Windows protected your PC"?** That warning is expected — see
+> [Why does Windows warn about this?](#why-does-windows-warn-about-this) below.
 
 ## Using it
 
@@ -54,6 +57,27 @@ Everything is configurable live, no restart:
 | **Enlarged for** | Short (0.7s), **Normal (1s)**, Long (1.5s) |
 | **Language** | English / Español (auto-detected from Windows) |
 | **Start with Windows** | Toggle autostart |
+
+## Why does Windows warn about this?
+
+When you run the download, Windows may show **"Windows protected your PC — unknown
+publisher"**. That is expected, and it does not mean anything is wrong with the file.
+
+Giant Cursor isn't **code-signed**. A signing certificate costs hundreds of dollars a
+year, and this is free software. Windows shows that warning for *any* unsigned program
+downloaded from the internet — Go, Electron, C++, it makes no difference.
+
+**To run it:** click **More info** → **Run anyway**. You only do this once per file.
+
+**To verify the download is authentic:** GitHub shows a SHA-256 for every release asset.
+Compare it with your copy:
+
+```powershell
+Get-FileHash .\GiantCursorSetup.exe -Algorithm SHA256
+```
+
+If the hashes match, your file is byte-for-byte what the [release workflow](.github/workflows/release.yml)
+built from this source code.
 
 ## Why not PowerToys "Find My Mouse"?
 

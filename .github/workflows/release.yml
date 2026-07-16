@@ -24,7 +24,8 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Build portable exe
+      # The installer bundles giant-cursor.exe, so keep that name for the build.
+      - name: Build exe
         run: go build -ldflags "-H=windowsgui -s -w" -o giant-cursor.exe ./cmd/giant-cursor
 
       - name: Install Inno Setup
@@ -33,10 +34,37 @@ jobs:
       - name: Build installer
         run: iscc installer\giant-cursor.iss
 
+      # Publish the standalone build under a name that says what it is.
+      - name: Name the portable download
+        run: copy giant-cursor.exe giant-cursor-portable.exe
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            giant-cursor.exe
             installer/Output/GiantCursorSetup.exe
+            giant-cursor-portable.exe
           generate_release_notes: true
+          body: |
+            ## Which file do I download?
+
+            | File | Get this if… |
+            |------|--------------|
+            | **`GiantCursorSetup.exe`** | **← Most people.** Installer: choose your language, optionally start with Windows, adds Start Menu shortcuts, and restores your cursor if you uninstall. |
+            | `giant-cursor-portable.exe` | You'd rather not install anything — download and run it. |
+
+            ## How to use it
+
+            **Shake the mouse** and the cursor grows. Stop shaking and it shrinks back.
+            Right-click the tray icon (next to the clock) to change the size, sensitivity or language, or to quit.
+
+            ## "Windows protected your PC" — is that normal?
+
+            Yes, and it's expected. Giant Cursor isn't code-signed: certificates cost hundreds of
+            dollars a year and this is free software. Windows shows that warning for **any**
+            unsigned program downloaded from the internet, whatever it's written in.
+
+            Click **More info → Run anyway**. GitHub publishes each file's SHA-256 above, so you
+            can verify your download matches exactly what this repository built.
+
+            ---
