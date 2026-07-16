@@ -1,0 +1,18 @@
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.test
+*.out
+
+# Installer output
+installer/Output/
+
+# Config / local
+config.json
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
