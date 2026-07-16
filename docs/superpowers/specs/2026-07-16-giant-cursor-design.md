@@ -1,251 +1,198 @@
-# Giant Cursor — Design Document
+# Giant Cursor — Design
 
-**Date:** 2026-07-16
-**Status:** Approved (pending written-spec review)
-**Platform:** Windows (10/11), amd64
-**Language:** Go 1.26.2, no CGo (single self-contained `.exe`)
+**Status:** Implemented (v1.0.0)
+**Platform:** Windows 10/11, amd64
+**Language:** Go 1.26, no CGo — one self-contained `.exe`
+
+This document describes what Giant Cursor actually is and why it is built this
+way, including the approaches that were tried and rejected. It is kept in sync
+with the code; the user-facing documentation is [`README.md`](../../../README.md).
 
 ---
 
 ## 1. Problem
 
-People with low vision routinely lose track of the mouse cursor on screen. macOS
-solves this with a "shake to locate" gesture: shaking the mouse temporarily
-magnifies the pointer so it becomes impossible to miss, then it shrinks back.
+People with low vision routinely lose track of the mouse pointer. macOS solves
+this by magnifying the pointer when you shake the mouse. Windows has no
+equivalent, and PowerToys "Find My Mouse" is unsatisfactory:
 
-Windows has no built-in equivalent. PowerToys "Find My Mouse" approximates it but
-is unsatisfactory for two reasons:
+- It draws a full-screen spotlight overlay, which forces whole-screen
+  composition.
+- It relies on a low-level global mouse hook (`WH_MOUSE_LL`), which Windows can
+  starve when the system is busy — so it intermittently stops responding.
 
-1. **Overhead** — it is a .NET component and draws a full-screen overlay
-   (spotlight), which forces whole-screen composition every frame.
-2. **Unreliability under load** — it relies on a low-level global mouse hook
-   (`WH_MOUSE_LL`). When the system is busy with many applications, Windows can
-   starve or silently detach the hook (callback timeout), so the effect
-   intermittently stops working.
+## 2. Goals
 
-## 2. Goal
-
-A tiny, fast, reliable Windows utility that reproduces the macOS "shake to
-enlarge the cursor" behavior, built to be publicly distributed as an accessibility
-tool for everyone.
-
-### Success criteria
-
-- Shaking the mouse enlarges the **actual system cursor** (default 4x).
-- The cursor stays enlarged for a short hold (~1s) after the last shake, then
-  returns to normal even if the mouse keeps moving — plain movement must not
-  keep it enlarged.
-- Negligible CPU/memory footprint; works reliably even with many apps open.
+- Shaking the mouse enlarges the cursor; it returns to normal on its own.
+- Negligible CPU; reliable even with many apps open.
 - Never leaves the cursor stuck enlarged, even after a crash or forced kill.
-- Easy to install (portable `.exe` + a friendly installer) and well documented.
+- Configurable from a tray icon, in English or Spanish.
+- Publicly distributable: installer, portable exe, MIT licensed.
 
-### Non-goals (YAGNI)
+### Non-goals
 
-- No spotlight/halo effect (explicitly rejected).
-- No settings GUI window.
-- No system-tray icon.
-- No support for fully custom (non-standard) application cursors in v1.
-- No pixel-perfect crispness at 4x in v1 (documented tradeoff; see §10).
+- No spotlight/halo effect.
+- No settings window (the tray menu is the whole UI).
+- No support for cursors that applications draw themselves.
 
-## 3. Core technical decisions
+## 3. Core decisions
 
-### 3.1 Detection by polling, NOT by hook
+### 3.1 Detection by polling, not by hook
 
-A dedicated goroutine polls `GetCursorPos` at ~120 Hz (every ~8 ms). This is the
-key decision that fixes PowerToys' reliability problem: polling cannot be starved
-or detached the way a low-level hook can. CPU cost is negligible.
+A dedicated goroutine polls `GetCursorPos` every ~8 ms (~120 Hz). Polling cannot
+be starved or detached the way a low-level hook can, which is the root cause of
+PowerToys' unreliability. CPU cost is negligible.
 
-### 3.2 Enlargement via `SetSystemCursor`
+### 3.2 Enlargement by `SetSystemCursor`
 
-On shake, the standard system cursors are swapped for pre-scaled larger copies via
-`SetSystemCursor`. There is **no overlay window, no per-frame drawing, and no
-screen composition** — the OS renders the (bigger) cursor exactly as it always
-does. This is the lightest possible mechanism.
+On shake, the standard system cursors are replaced with enlarged ones via
+`SetSystemCursor`. There is **no overlay and no per-frame drawing** — the OS
+renders the (bigger) cursor as it always does. Restore reloads the user's cursor
+scheme with `SystemParametersInfo(SPI_SETCURSORS)`.
 
-Restore is done by reloading the user's configured cursor scheme with
-`SystemParametersInfo(SPI_SETCURSORS)`, rather than manually tracking and
-restoring individual handles.
-
-### 3.3 State machine
+### 3.3 Shake and hold
 
 ```
-NORMAL ──(shake detected)──► BIG ──(no shake for ~1s hold)──► NORMAL
+NORMAL ──(shake detected)──► BIG ──(no shake for HoldMillis)──► NORMAL
 ```
 
-- **Shake detection:** keep a short ring buffer of recent (position, timestamp)
-  samples; count direction reversals on the X and Y axes within a sliding window
-  (~400 ms) above a minimum speed threshold. Crossing the reversal threshold
-  triggers the transition to BIG. Sensitivity is configurable.
-- **Hold detection:** entering BIG arms a hold timer. While BIG, each new shake
-  re-arms it; once `HoldMillis` (~1s) pass with no further shake, transition
-  back to NORMAL. Smooth movement does NOT re-arm the timer, so ordinary use
-  after locating the cursor shrinks it back promptly. (This replaced an earlier
-  "shrink when the mouse stops moving" rule, which kept the cursor enlarged
-  during normal use — found in smoke testing.)
+- **Shake:** enough per-axis direction reversals within a sliding window, above
+  a noise floor. Sensitivity tunes the thresholds.
+- **Hold:** entering BIG arms a timer; each new shake re-arms it. After
+  `HoldMillis` (~1 s) with no further shake it returns to NORMAL.
+  **Plain movement does not re-arm the timer** — an earlier "shrink when the
+  mouse stops moving" rule kept the cursor enlarged during ordinary use and was
+  replaced after smoke testing.
+
+### 3.4 Crispness: high-resolution artwork, scaled down
+
+Windows only ships its cursors at 32 px, so *upscaling* them is inherently
+blurry. `StyleCrisp` instead embeds high-resolution artwork (the pointer and the
+hand) and **scales it down** to the requested size, which stays sharp.
+
+`StyleSystem` keeps the user's real cursors, upscaled and therefore soft. It is
+offered because some people prefer their exact cursors over ours.
 
 ## 4. Architecture
 
-Hexagonal / "screaming" architecture. The shake-detection domain is **pure** (no
-Windows dependency), so it is fully unit-testable without Windows. Windows sits
-behind ports with Windows-only adapters.
+Hexagonal. The shake-detection domain is pure and fully unit-tested; Windows
+sits behind ports with Windows-only adapters.
 
 ```
-giant-cursor/
-├─ cmd/giant-cursor/
-│  └─ main.go                     # flags, lifecycle wiring, message loop
-├─ internal/shake/
-│  ├─ detector.go                 # PURE domain: shake + hold detection
-│  └─ detector_test.go            # golden cases (TDD)
-├─ internal/cursor/
-│  ├─ cursor.go                   # Enlarger port (interface)
-│  └─ cursor_windows.go           # Win32 adapter (SetSystemCursor / SPI_SETCURSORS)
-├─ internal/input/
-│  ├─ source.go                   # PositionSource port (interface)
-│  └─ poller_windows.go           # GetCursorPos polling adapter
-├─ internal/app/
-│  └─ app.go                      # state machine: wires detector + input + cursor
-├─ internal/lifecycle/
-│  ├─ hotkey_windows.go           # RegisterHotKey (Ctrl+Shift+F12) + message loop
-│  ├─ instance_windows.go         # single-instance named mutex
-│  └─ cleanup_windows.go          # console/session shutdown → restore cursors
-├─ internal/config/
-│  └─ config.go                   # flags + config.json load/save
-├─ installer/
-│  └─ giant-cursor.iss            # Inno Setup script
-├─ .github/workflows/release.yml  # build portable exe + installer on tag
-├─ go.mod
-└─ README.md                      # English, public
+cmd/giant-cursor/     entry point: flags, config, tray wiring, poll loop
+cmd/genicon/          assets/icon-source.png       -> .ico (app/tray/installer)
+cmd/genarrow/         assets/cursor-raw/*.png      -> embedded cursor artwork
+
+internal/shake/       PURE domain: shake + hold detection (TDD)
+internal/config/      sensitivity presets -> shake.Config
+internal/cursor/      Enlarger port + Win32 adapter + artwork
+internal/input/       PositionSource port + GetCursorPos adapter
+internal/app/         state machine: detector -> enlarger side effects
+internal/control/     thread-safe live settings (tray writes, poll loop reads)
+internal/lifecycle/   tray icon + menu, single instance, cleanup
+internal/i18n/        English/Spanish tray labels
 ```
 
 ### Ports
 
 ```go
-// internal/input/source.go
-type Point struct{ X, Y int32 }
-
-type PositionSource interface {
-    // Poll returns the current cursor position.
-    Poll() (Point, error)
+type Enlarger interface {         // internal/cursor
+    Enlarge() error
+    Restore() error
 }
 
-// internal/cursor/cursor.go
-type Enlarger interface {
-    Enlarge() error   // swap standard cursors to scaled copies
-    Restore() error   // reload user's cursor scheme (SPI_SETCURSORS)
+type PositionSource interface {   // internal/input
+    Poll() (shake.Point, error)
 }
 ```
 
-The domain (`shake.Detector`) consumes samples and emits state transitions; it
-never imports `cursor` or `input` adapters. `app.App` wires them together.
+`control.Controller` owns the current settings behind a mutex. The poll loop
+calls `Step`; the tray calls `SetScale` / `SetSensitivity` / `SetHold` /
+`SetStyle`, which normalize the cursor, rebuild the detector and enlarger from a
+factory, and persist via a callback. That is why a menu change applies live.
 
 ### Dependencies
 
-- `golang.org/x/sys/windows` (v0.47.0) — Win32 syscalls.
-- Standard library only otherwise. `CGO_ENABLED=0`.
+`golang.org/x/sys` (Win32) and `golang.org/x/image` (downscaling). Standard
+library otherwise. `CGO_ENABLED=0`.
 
-## 5. Windows integration details
+## 5. Cursor artwork pipeline
 
-### Cursors covered (standard `OCR_*` ids)
+Source art lives in `assets/cursor-raw/*.png`: white shapes with a thick black
+outline on a **blue** background. `cmd/genarrow`:
 
-`OCR_NORMAL`, `OCR_IBEAM`, `OCR_WAIT`, `OCR_CROSS`, `OCR_UP`, `OCR_SIZENWSE`,
-`OCR_SIZENESW`, `OCR_SIZEWE`, `OCR_SIZENS`, `OCR_SIZEALL`, `OCR_NO`, `OCR_HAND`,
-`OCR_APPSTARTING`, `OCR_HELP`.
+1. Keys out the background — the artwork is neutral (white/black) while the
+   backdrop is saturated blue, so "blueness" (B minus the strongest of R/G)
+   separates them, with a soft ramp for anti-aliased edges.
+2. Crops to the content and writes `internal/cursor/<name>.png`, which is
+   embedded with `go:embed`.
 
-For each id: load the current cursor and build a scaled copy at `base * scale`
-using `LoadImageW` / `CopyImage`. Because `SetSystemCursor` takes ownership of the
-handle it is given (and destroys it), a **fresh** scaled copy is created for each
-`SetSystemCursor` call.
+At runtime `internal/cursor.artwork` decodes the PNG once, scales it with
+CatmullRom to `artFill` (62 %) of the cursor box — matching the visual size of
+the upscaled system cursor — and detects the **hotspot** as the middle of the
+topmost opaque run (the arrow's apex, the hand's fingertip).
 
-### Enlarge
+Adding a cursor is data, not code: drop the art in `assets/cursor-raw/`, add the
+name to `cursors` in `cmd/genarrow`, and add one entry to `crispArt` in
+`internal/cursor/cursor_windows.go`.
 
-For each covered id: `SetSystemCursor(freshBigCopy, id)`.
+## 6. Safety: never leave the cursor stuck
 
-### Restore
+`SetSystemCursor` is global and is **not** reverted when the process dies.
+Mitigations, all mandatory:
 
-`SystemParametersInfo(SPI_SETCURSORS, 0, nil, 0)` reloads the user's configured
-scheme — clean and does not depend on us holding original handles.
+1. **Startup reset** — every launch restores before doing anything, so a crash
+   that left the cursor enlarged is fixed by simply launching again.
+2. **Clean exit** — the tray's *Quit* restores and exits.
+3. **Shutdown hooks** — `SetConsoleCtrlHandler` restores where the OS allows.
+4. **Panic button** — `giant-cursor.exe --restore`.
+5. **Uninstall** — the installer runs `--restore`.
+6. **Single instance** — a named mutex prevents stacked instances.
 
-## 6. Safety: never leave the cursor stuck enlarged
-
-`SetSystemCursor` changes are **global** and are **not** reverted when the process
-dies. Mitigations (all mandatory):
-
-1. **Startup reset:** on launch, call `SPI_SETCURSORS` first to establish a clean
-   baseline. If a previous run crashed while BIG, simply relaunching fixes it.
-2. **Clean-restore path:** restore always uses `SPI_SETCURSORS`.
-3. **Clean exit via hotkey:** `Ctrl+Shift+F12` restores cursors and exits.
-   (Ctrl+Alt is avoided: on Spanish/Latin-American layouts it is AltGr and
-   collides with `@` and other characters.)
-4. **Extra shutdown hooks:** `SetConsoleCtrlHandler` and
-   `WM_QUERYENDSESSION`/`WM_ENDSESSION` restore where the OS gives us a chance.
-5. **Panic button:** `giant-cursor.exe --restore` restores cursors and exits.
-6. **Single instance:** a named mutex prevents stacked instances.
-
-Note: a hard `TerminateProcess` (Task Manager "End Task") cannot run our code —
-mitigation #1 (startup reset) and #5 (`--restore`) cover that case.
+The user's normal cursor base size is captured on first run and persisted in
+`config.json`, so restore always has a known-good target.
 
 ## 7. Configuration
 
-Command-line flags with sensible defaults:
+Everything is live-adjustable from the tray and persisted to
+`%LOCALAPPDATA%\giant-cursor\config.json`.
 
-| Flag | Default | Meaning |
+| Setting | Default | Notes |
 |---|---|---|
-| `--scale` | `4` | Enlargement factor. |
-| `--sensitivity` | `medium` | Shake sensitivity (`low`/`medium`/`high`). |
-| `--hold-ms` | `1000` | Time to stay enlarged after the last shake. |
-| `--hotkey` | `ctrl+shift+f12` | Clean-exit hotkey (fixed in v1). |
+| Style | `crisp` | `crisp` or `system` |
+| Scale | `4` | 2, 3, 4, 5, 6, 8 |
+| Sensitivity | `medium` | `low` / `medium` / `high` |
+| Hold | `1000` ms | 700 / 1000 / 1500 |
+| Language | auto | `en` / `es`, detected via `GetUserDefaultUILanguage` |
+| Autostart | off | `Run` registry key |
 
-Lifecycle flags:
-
-| Flag | Action |
-|---|---|
-| `--install` | Register autostart + save `config.json`, then start. |
-| `--uninstall` | Remove autostart, restore cursors. |
-| `--restore` | Restore cursors and exit (panic button). |
-
-`--install` persists chosen settings to
-`%LOCALAPPDATA%\giant-cursor\config.json`, read on startup so autostart carries
-the user's configuration. Running with no window is the default; there is no tray
-icon and no settings window.
+Command-line flags mirror these and override the config file for that run.
 
 ## 8. Distribution
 
-- **Portable:** the standalone `.exe` — download and run, zero dependencies.
-- **Installer:** an **Inno Setup** package (`GiantCursorSetup.exe`) with a familiar
-  wizard, a Start Menu shortcut, and a "Start with Windows" checkbox. Inno Setup is
-  a build-time dependency only (not required by end users).
-- **Autostart:** via the `Run` registry key, toggled by the installer checkbox or
-  `--install` / `--uninstall`.
-- **CI:** a GitHub Actions workflow builds the portable `.exe` and the installer on
-  tagged releases.
-- **Future:** winget / scoop manifests.
+- **Portable:** the standalone `.exe`, zero dependencies.
+- **Installer:** Inno Setup, per-user (no admin), bilingual, autostart checkbox,
+  passes the chosen language to the app, restores the cursor on uninstall.
+- **Icon:** `assets/icon-source.png` → `cmd/genicon` → multi-resolution `.ico`,
+  embedded in the exe (`rsrc_windows.syso`) and loaded by the tray via
+  `CreateIconFromResourceEx`.
+- **CI:** on a `v*` tag, GitHub Actions tests, builds the exe and the installer,
+  and publishes the release.
 
-## 9. Testing (Strict TDD)
+## 9. Rejected approaches
 
-The `shake` package is pure logic and is developed test-first with synthetic
-sequences of `(position, timestamp)` samples. Golden cases:
+Recording these so nobody re-litigates them.
 
-- A vigorous back-and-forth shake **triggers** BIG.
-- Normal straight movement does **not** trigger.
-- Slow drift does **not** trigger.
-- Diagonal shake **triggers**.
-- Sensitivity thresholds behave monotonically (higher sensitivity → easier trigger).
-- After BIG, `hold-ms` with no further shake returns to NORMAL; continued shaking keeps BIG; smooth movement does NOT keep BIG.
+| Approach | Why rejected |
+|---|---|
+| **Native cursor size** (`CursorBaseSize` + `SPI_SETCURSORS`) | The documented way to get crisp large cursors, and the only one that would cover *all* cursor shapes. The registry value was written correctly (verified by read-back) but `SPI_SETCURSORS` returned 0 and the size never applied live — with `uiParam=0`, with the size as `uiParam`, and with a `WM_SETTINGCHANGE` broadcast. Dead on the target machine. The code survives only in `StyleNative`, used by `--restore` because it resets the base size *and* reloads the scheme. |
+| **Drawing the pointer from a polygon** | Hand-tuned vertices never matched the reference art; several rounds of "it looks strange". Replaced by scaling down real artwork, which is exact and needs no code to restyle. |
+| **Global hotkey to quit** (`Ctrl+Alt+Q`) | On Spanish/Latin-American layouts `Ctrl+Alt` is AltGr, so the hotkey collided with `@`. Replaced by the tray menu. **Never use `Ctrl+Alt`+letter for global hotkeys.** |
+| **Synthesized I-beam** | A text caret is essentially thin black lines; the white-fill-with-thick-outline style that suits the pointer and hand turns it into a blocky letter "I". Dropped — the text cursor uses the system zoom. |
 
-The Win32 adapters (`cursor_windows.go`, `input/poller_windows.go`) are thin and
-verified manually on Windows. Ports allow the domain tests to run with fake
-adapters on any OS.
+## 10. Known limitations
 
-## 10. Known tradeoff (accepted)
-
-At 4x, scaling a 32px standard cursor to 128px via `CopyImage` looks **somewhat
-pixelated**. This is accepted for v1: the priority is never losing the cursor, and
-the runtime-scaling approach is simple and light. A future v1.1 may bundle
-high-resolution large cursor assets for pixel-perfect crispness.
-
-## 11. Open items for implementation planning
-
-- Exact reversal-count and speed thresholds per sensitivity level (tuned during
-  TDD, then validated manually).
-- Whether to also cover `OCR_SIZE`/legacy aliases.
-- Message-loop threading model (`runtime.LockOSThread` for the loop goroutine).
+- Only standard system cursors are affected; app-drawn cursors are not.
+- In `crisp` mode only the pointer and the hand use artwork; the rest are
+  upscaled and softer.
+- `system` mode is soft everywhere, because Windows only ships 32px cursors.
