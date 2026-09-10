@@ -138,24 +138,22 @@ type Overlay struct {
 	failed  bool // a creation failure disables the overlay for the session
 
 	hwnd    uintptr
-	edge    int // current window edge length
 	anchorX int
 	anchorY int
 
-	ready chan struct{}
-	once  sync.Once
+	once sync.Once
 }
 
 // New returns an overlay with no painter, so it does nothing until SetMode
 // selects one. The window is created lazily on the first Enlarge with a
 // painter set, so config.OverlayOff really does cost nothing.
 func New() *Overlay {
-	return &Overlay{ready: make(chan struct{})}
+	return &Overlay{}
 }
 
 // SetMode selects the painter, or none at all for config.OverlayOff. Switching
-// to off hides the window immediately; switching between shapes discards the
-// cached bitmap, which is redrawn on the next Enlarge.
+// to off hides the window immediately. Switching between shapes changes nothing
+// on screen until the next Enlarge, which is where the art is drawn.
 func (o *Overlay) SetMode(mode config.OverlayMode) {
 	o.mu.Lock()
 	o.painter = PainterFor(mode)
@@ -198,22 +196,30 @@ func (o *Overlay) Enlarge() error {
 		return nil
 	}
 
+	// The flag and the ShowWindow call must not be separable: a Restore landing
+	// between them would hide the window, clear visible, and then be overtaken
+	// by this show, leaving the overlay on screen with visible == false, after
+	// which every later Track and Restore no-ops and the art freezes mid-screen.
 	o.mu.Lock()
 	o.visible = true
-	o.mu.Unlock()
 	procShowWindowO.Call(hwnd, swShowNA)
+	o.mu.Unlock()
 	return nil
 }
 
-// Restore hides the overlay. The window and its bitmap are kept for reuse.
+// Restore hides the overlay. The window is kept for reuse.
+//
+// It hides unconditionally whenever a window exists, rather than only when it
+// believes the window is visible: cursor.Enlarger documents that Restore must
+// be total, because a stuck enlarged cursor is the worst failure this app can
+// produce, and a redundant SW_HIDE costs nothing.
 func (o *Overlay) Restore() error {
 	o.mu.Lock()
-	hwnd, visible := o.hwnd, o.visible
-	o.visible = false
-	o.mu.Unlock()
+	defer o.mu.Unlock()
 
-	if hwnd != 0 && visible {
-		procShowWindowO.Call(hwnd, swHide)
+	o.visible = false
+	if o.hwnd != 0 {
+		procShowWindowO.Call(o.hwnd, swHide)
 	}
 	return nil
 }
@@ -319,6 +325,14 @@ func (o *Overlay) paint(hwnd uintptr, img *image.RGBA, anchorX, anchorY int) err
 	if w < 1 || h < 1 {
 		return fmt.Errorf("refusing to paint an empty image")
 	}
+	// The copy loop below walks img.Pix as one tightly packed run of w*h pixels,
+	// which only holds for a whole image. A sub-image sharing a larger backing
+	// array has Stride > w*4, and the loop would read the wrong pixels and then
+	// run off the end. Both painters return whole images today; refusing here
+	// turns a future out-of-range panic into a disabled overlay.
+	if img.Stride != w*4 || len(img.Pix) < w*h*4 {
+		return fmt.Errorf("unexpected image layout: stride %d and %d bytes for %dx%d", img.Stride, len(img.Pix), w, h)
+	}
 
 	screenDC, _, _ := procGetDCO.Call(0)
 	if screenDC == 0 {
@@ -378,7 +392,7 @@ func (o *Overlay) paint(hwnd uintptr, img *image.RGBA, anchorX, anchorY int) err
 	}
 
 	o.mu.Lock()
-	o.edge, o.anchorX, o.anchorY = w, anchorX, anchorY
+	o.anchorX, o.anchorY = anchorX, anchorY
 	o.mu.Unlock()
 	// Keep the window on top: a game going fullscreen-windowed can push it down.
 	procSetWindowPosO.Call(hwnd, hwndTopmost, 0, 0, 0, 0, swpNoActivate|swpNoSize|swpNoMove)
