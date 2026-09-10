@@ -27,6 +27,7 @@ var (
 	procDispatchMsgO    = user32o.NewProc("DispatchMessageW")
 	procShowWindowO     = user32o.NewProc("ShowWindow")
 	procSetWindowPosO   = user32o.NewProc("SetWindowPos")
+	procPostMessageO    = user32o.NewProc("PostMessageW")
 	procUpdateLayeredW  = user32o.NewProc("UpdateLayeredWindow")
 	procGetDCO          = user32o.NewProc("GetDC")
 	procReleaseDCO      = user32o.NewProc("ReleaseDC")
@@ -68,6 +69,12 @@ const (
 	acSrcAlpha   = 0x01
 	biRGB        = 0
 	dibRGBColors = 0
+
+	// wmOverlayPaint asks the overlay's own thread to push the art waiting on
+	// o.paints into the layered window. WM_APP is the range Windows reserves
+	// for an application's private messages, so it can never collide with a
+	// system message this window might receive.
+	wmOverlayPaint = 0x8000 + 1 // WM_APP + 1
 )
 
 // debugf reports overlay failures when GIANTCURSOR_DEBUG is set. The overlay is
@@ -137,9 +144,24 @@ type Overlay struct {
 	visible bool
 	failed  bool // a creation failure disables the overlay for the session
 
+	// showPending defers the reveal to the first Track of an activation, so
+	// the window is never shown before it has a position. Without it the very
+	// first activation of the session presents the art at (0,0) — the corner
+	// the window was created at — for however long it takes the next sample to
+	// arrive. internal/app calls Track immediately after Enlarge on the same
+	// sample, so the delay is not observable.
+	showPending bool
+
 	hwnd    uintptr
 	anchorX int
 	anchorY int
+
+	// paints hands finished art from Enlarge to the overlay's own thread,
+	// which is the only thread allowed to touch a device context (see paint).
+	// It is buffered and only ever written by an Enlarge holding o.mu, so the
+	// send never blocks, and the overlay thread only ever reads it without
+	// blocking. Nothing on either side can wait for the other.
+	paints chan *image.RGBA
 
 	once sync.Once
 }
@@ -148,12 +170,21 @@ type Overlay struct {
 // selects one. The window is created lazily on the first Enlarge with a
 // painter set, so config.OverlayOff really does cost nothing.
 func New() *Overlay {
-	return &Overlay{}
+	return &Overlay{paints: make(chan *image.RGBA, 1)}
 }
 
 // SetMode selects the painter, or none at all for config.OverlayOff. Switching
 // to off hides the window immediately. Switching between shapes changes nothing
 // on screen until the next Enlarge, which is where the art is drawn.
+//
+// The design document says selecting off "hides and destroys the window
+// immediately". It is deliberately only hidden here. The window is created once
+// per process precisely because destroying and recreating it costs a window
+// class, a thread and a message pump on every menu click, and the overlay's own
+// thread is locked for the life of the process anyway; a hidden layered window
+// that is never painted composites nothing and costs nothing. The observable
+// behaviour the document cares about — nothing on screen after selecting off —
+// is what Restore delivers.
 func (o *Overlay) SetMode(mode config.OverlayMode) {
 	o.mu.Lock()
 	o.painter = PainterFor(mode)
@@ -171,8 +202,18 @@ func (o *Overlay) SetScale(cursorSize int) {
 	o.mu.Unlock()
 }
 
-// Enlarge paints the overlay and shows it. The bitmap is built here, once per
-// activation, so Track only has to move a window.
+// Enlarge draws the art and hands it to the overlay's own thread to push into
+// the window. The bitmap is built here, once per activation, so Track only has
+// to move a window.
+//
+// Drawing happens on the calling goroutine because it is pure Go; only the GDI
+// half is thread-affine. Windows requires a device context to be released by
+// the thread that acquired it, and a memory DC dies with the thread that
+// created it, so the GetDC/CreateCompatibleDC work in paint cannot run on the
+// polling goroutine — the runtime is free to resume that goroutine on a
+// different OS thread across a blocking syscall, and the deferred releases
+// would then be issued from the wrong thread. That leaks a DC per activation
+// until the process runs out of them and every paint silently fails.
 func (o *Overlay) Enlarge() error {
 	o.mu.Lock()
 	painter, size, failed := o.painter, o.size, o.failed
@@ -191,19 +232,41 @@ func (o *Overlay) Enlarge() error {
 
 	hwnd := o.handle()
 	img, ax, ay := painter.Draw(size)
-	if err := o.paint(hwnd, img, ax, ay); err != nil {
-		debugf("paint failed: %v", err)
-		return nil
-	}
 
-	// The flag and the ShowWindow call must not be separable: a Restore landing
-	// between them would hide the window, clear visible, and then be overtaken
-	// by this show, leaving the overlay on screen with visible == false, after
-	// which every later Track and Restore no-ops and the art freezes mid-screen.
+	// One critical section, because a Restore that lands anywhere inside it
+	// must either be fully overtaken by this activation or fully overtake it.
+	// Splitting it would let a Restore hide the window and clear the flags
+	// only to have this call set them again, leaving the overlay on screen
+	// with nothing able to hide it. PostMessage is safe to hold the lock
+	// across: it appends to the target queue and returns, and never waits for
+	// the overlay thread.
 	o.mu.Lock()
-	o.visible = true
-	procShowWindowO.Call(hwnd, swShowNA)
+	// Drop art the overlay thread has not picked up yet: it is stale by
+	// definition, and this is the only sender, so the send below cannot block.
+	select {
+	case <-o.paints:
+	default:
+	}
+	o.paints <- img
+	posted, _, e := procPostMessageO.Call(hwnd, wmOverlayPaint, 0, 0)
+	if posted != 0 {
+		o.anchorX, o.anchorY = ax, ay
+		o.visible = true
+		o.showPending = true
+	} else {
+		// Take the art back rather than leave it for a message that will never
+		// arrive. The receive must not block: an earlier message may already
+		// have carried this art away.
+		select {
+		case <-o.paints:
+		default:
+		}
+	}
 	o.mu.Unlock()
+
+	if posted == 0 {
+		debugf("posting the paint request failed, overlay stays hidden: %v", e)
+	}
 	return nil
 }
 
@@ -218,14 +281,19 @@ func (o *Overlay) Restore() error {
 	defer o.mu.Unlock()
 
 	o.visible = false
+	// Clearing the latch under the same lock is what stops a reveal that was
+	// armed by an Enlarge from landing after this hide and putting the art
+	// back on screen with nothing left to take it off again.
+	o.showPending = false
 	if o.hwnd != 0 {
 		procShowWindowO.Call(o.hwnd, swHide)
 	}
 	return nil
 }
 
-// Track centres the window on the pointer. Nothing is repainted here: at 125
-// samples per second, moving a window is cheap and repainting one is not.
+// Track centres the window on the pointer, and reveals it on the first call
+// after an Enlarge. Nothing is repainted here: at 125 samples per second,
+// moving a window is cheap and repainting one is not.
 func (o *Overlay) Track(x, y int) {
 	o.mu.Lock()
 	hwnd, visible, ax, ay := o.hwnd, o.visible, o.anchorX, o.anchorY
@@ -239,6 +307,17 @@ func (o *Overlay) Track(x, y int) {
 		uintptr(int32(x-ax)), uintptr(int32(y-ay)), 0, 0,
 		swpNoActivate|swpNoZOrder|swpNoSize,
 	)
+
+	// The window now has a position, so it is safe to show. Testing the latch
+	// and showing must happen in one critical section, for the same reason
+	// Restore clears the latch inside one: a Restore in between would hide a
+	// window this call is about to show, and the show would win.
+	o.mu.Lock()
+	if o.showPending && o.visible {
+		o.showPending = false
+		procShowWindowO.Call(hwnd, swShowNA)
+	}
+	o.mu.Unlock()
 }
 
 // handle returns the window handle, or 0 before the window exists. Every read
@@ -297,6 +376,11 @@ func (o *Overlay) run(started chan<- error) {
 		started <- fmt.Errorf("CreateWindowEx failed: %w", e)
 		return
 	}
+	// This is the only place the overlay's own thread takes o.mu, and it is
+	// safe because it happens before any other thread can reach this window: no
+	// caller has the handle yet, and ensureWindow is still blocked on started.
+	// Once the pump below is running, nothing on this thread touches o.mu — see
+	// overlayWndProc for what depends on that.
 	o.mu.Lock()
 	o.hwnd = hwnd
 	o.mu.Unlock()
@@ -308,18 +392,62 @@ func (o *Overlay) run(started chan<- error) {
 		if int32(r) <= 0 {
 			return
 		}
+		// Paint requests are handled here, in the loop, rather than in
+		// overlayWndProc. The window procedure also runs on this thread, but it
+		// runs for messages SENT from other threads too, and those callers are
+		// blocked while it runs; the loop only ever runs for messages this
+		// thread has already dequeued, with nobody waiting on it. Servicing the
+		// paint here is what lets it touch overlay state at all.
+		if m.message == wmOverlayPaint {
+			o.servicePaint(hwnd)
+			continue
+		}
 		procTranslateMsgO.Call(uintptr(unsafe.Pointer(&m)))
 		procDispatchMsgO.Call(uintptr(unsafe.Pointer(&m)))
 	}
 }
 
+// servicePaint pushes the art Enlarge left on o.paints into the window. It runs
+// only on the overlay's own locked thread, which is what makes the device
+// contexts in paint legal, and it never takes o.mu — see overlayWndProc.
+func (o *Overlay) servicePaint(hwnd uintptr) {
+	var img *image.RGBA
+	select {
+	case img = <-o.paints:
+	default:
+		// An Enlarge took its art back after posting, or a later Enlarge
+		// replaced it and its own message is still queued behind this one.
+		return
+	}
+	if err := o.paint(hwnd, img); err != nil {
+		debugf("paint failed: %v", err)
+	}
+}
+
+// overlayWndProc must never touch o.mu, and neither must anything it calls.
+//
+// A thread blocked in a cross-thread ShowWindow or SetWindowPos does not sit
+// idle: Windows delivers the work to the target window's thread and runs it
+// there, inside its window procedure, while the caller waits. Enlarge, Restore
+// and Track all make those calls while holding o.mu. If this procedure took
+// o.mu it would block on the very caller that is blocked on it, and the two
+// threads would wedge for the life of the process — a frozen ring on screen in
+// the best case. Work that needs overlay state is posted to the message loop
+// instead, where nobody is waiting (see run and servicePaint).
 func overlayWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	r, _, _ := procDefWindowProcO.Call(hwnd, msg, wparam, lparam)
 	return r
 }
 
 // paint pushes an image into the layered window with per-pixel alpha.
-func (o *Overlay) paint(hwnd uintptr, img *image.RGBA, anchorX, anchorY int) error {
+//
+// It must run on the overlay's own locked thread. Windows caches common device
+// contexts per thread and requires ReleaseDC from the thread that called GetDC,
+// and a CreateCompatibleDC context is destroyed with the thread that created
+// it. UpdateLayeredWindow is a blocking cross-thread syscall, so on any
+// unlocked goroutine the Go runtime may resume the deferred releases below on a
+// different OS thread than the one that acquired the contexts.
+func (o *Overlay) paint(hwnd uintptr, img *image.RGBA) error {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
 	if w < 1 || h < 1 {
@@ -391,9 +519,6 @@ func (o *Overlay) paint(hwnd uintptr, img *image.RGBA, anchorX, anchorY int) err
 		return fmt.Errorf("UpdateLayeredWindow failed: %w", e)
 	}
 
-	o.mu.Lock()
-	o.anchorX, o.anchorY = anchorX, anchorY
-	o.mu.Unlock()
 	// Keep the window on top: a game going fullscreen-windowed can push it down.
 	procSetWindowPosO.Call(hwnd, hwndTopmost, 0, 0, 0, 0, swpNoActivate|swpNoSize|swpNoMove)
 	return nil
