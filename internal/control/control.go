@@ -18,21 +18,24 @@ type Settings struct {
 	Sensitivity string
 	HoldMillis  int64
 	Style       string
+	Overlay     string // config.OverlayMode value: off | halo | pointer
 }
 
 // Controller wires Settings to a detector + enlarger and applies live changes.
 type Controller struct {
 	mu          sync.Mutex
 	set         Settings
-	newEnlarger func(scale int, style string) cursor.Enlarger
+	newEnlarger func(set Settings) cursor.Enlarger
 	cur         cursor.Enlarger
 	app         *app.App
 	onChange    func(Settings)
 }
 
-// New builds a Controller. newEnlarger creates an enlarger for a given scale and
-// style; onChange (optional) is called after every change so callers can persist.
-func New(set Settings, newEnlarger func(scale int, style string) cursor.Enlarger, onChange func(Settings)) *Controller {
+// New builds a Controller. newEnlarger creates an enlarger for a settings
+// value; onChange (optional) is called after every change so callers can
+// persist. newEnlarger receives the whole Settings so it can compose effectors
+// that depend on more than one field.
+func New(set Settings, newEnlarger func(set Settings) cursor.Enlarger, onChange func(Settings)) *Controller {
 	c := &Controller{set: set, newEnlarger: newEnlarger, onChange: onChange}
 	c.rebuild()
 	return c
@@ -41,7 +44,7 @@ func New(set Settings, newEnlarger func(scale int, style string) cursor.Enlarger
 // rebuild recreates the enlarger, detector, and app from the current settings.
 // Callers must hold c.mu (or be in the constructor).
 func (c *Controller) rebuild() {
-	c.cur = c.newEnlarger(c.set.Scale, c.set.Style)
+	c.cur = c.newEnlarger(c.set)
 	det := shake.New(config.ShakeConfig(config.Sensitivity(c.set.Sensitivity), c.set.HoldMillis))
 	c.app = app.New(det, c.cur)
 }
@@ -78,6 +81,9 @@ func (c *Controller) SetHold(ms int64) { c.apply(func() { c.set.HoldMillis = ms 
 
 // SetStyle changes the enlargement style (crisp / system / native).
 func (c *Controller) SetStyle(style string) { c.apply(func() { c.set.Style = style }) }
+
+// SetOverlay changes the game overlay mode (off / halo / pointer).
+func (c *Controller) SetOverlay(mode string) { c.apply(func() { c.set.Overlay = mode }) }
 
 // Get returns a copy of the current settings.
 func (c *Controller) Get() Settings {
