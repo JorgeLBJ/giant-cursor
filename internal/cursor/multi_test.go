@@ -74,3 +74,16 @@ func TestMultiTracksOnlyTrackingMembers(t *testing.T) {
 		t.Errorf("tracked (%d,%d), want (120,340)", tracker.lastX, tracker.lastY)
 	}
 }
+
+func TestMultiAttemptsEveryMemberAfterARestoreError(t *testing.T) {
+	boom := errors.New("boom")
+	failing, healthy := &fakeEffector{err: boom}, &fakeEffector{}
+	m := Multi{failing, healthy}
+
+	if err := m.Restore(); !errors.Is(err, boom) {
+		t.Fatalf("Restore = %v, want boom", err)
+	}
+	if healthy.restored != 1 {
+		t.Error("Restore must be total: a failing member must not stop the members after it")
+	}
+}
