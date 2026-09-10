@@ -83,6 +83,12 @@ func loadSettings(def settings) settings {
 	if s.Lang == "" {
 		s.Lang = def.Lang
 	}
+	// A config written before the overlay existed has no key at all. Without
+	// this the value stays empty, which reads as off but matches none of the
+	// tray's option values, so the menu shows no option marked.
+	if s.Overlay == "" {
+		s.Overlay = def.Overlay
+	}
 	return s
 }
 
