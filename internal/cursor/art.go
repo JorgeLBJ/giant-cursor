@@ -68,16 +68,16 @@ func findTip(img image.Image) (int, int) {
 	return 0, 0
 }
 
-// bitmap renders the artwork into a size×size top-down 32bpp premultiplied BGRA
-// buffer, anchored at the top-left, and returns the hotspot.
-func (a *artwork) bitmap(size int) (buf []byte, hotX, hotY int) {
+// render scales the artwork into a size×size premultiplied RGBA image anchored
+// at the top-left, and returns it with the hotspot in destination pixels.
+func (a *artwork) render(size int) (*image.RGBA, int, int) {
 	if size < 1 {
 		size = 1
 	}
-	buf = make([]byte, size*size*4)
+	dst := image.NewRGBA(image.Rect(0, 0, size, size))
 	a.once.Do(a.load)
 	if a.img == nil {
-		return buf, 0, 0
+		return dst, 0, 0
 	}
 
 	sb := a.img.Bounds()
@@ -93,17 +93,34 @@ func (a *artwork) bitmap(size int) (buf []byte, hotX, hotY int) {
 		targetW = size
 	}
 
-	dst := image.NewRGBA(image.Rect(0, 0, size, size))
 	xdraw.CatmullRom.Scale(dst, image.Rect(0, 0, targetW, targetH), a.img, sb, xdraw.Over, nil)
 
+	s := float64(targetH) / float64(sb.Dy())
+	return dst, int(float64(a.tipX) * s), int(float64(a.tipY) * s)
+}
+
+// bitmap renders the artwork into a size×size top-down 32bpp premultiplied BGRA
+// buffer, anchored at the top-left, and returns the hotspot.
+func (a *artwork) bitmap(size int) (buf []byte, hotX, hotY int) {
+	if size < 1 {
+		size = 1
+	}
+	dst, hotX, hotY := a.render(size)
+
 	// image.RGBA is premultiplied RGBA; Windows wants premultiplied BGRA.
+	buf = make([]byte, size*size*4)
 	for i := 0; i < size*size; i++ {
 		buf[i*4+0] = dst.Pix[i*4+2] // B
 		buf[i*4+1] = dst.Pix[i*4+1] // G
 		buf[i*4+2] = dst.Pix[i*4+0] // R
 		buf[i*4+3] = dst.Pix[i*4+3] // A
 	}
+	return buf, hotX, hotY
+}
 
-	s := float64(targetH) / float64(sb.Dy())
-	return buf, int(float64(a.tipX) * s), int(float64(a.tipY) * s)
+// ArrowImage renders the crisp arrow artwork at the given cursor size and
+// returns it with its tip position. The image is size×size premultiplied RGBA
+// with the arrow anchored at the top-left.
+func ArrowImage(size int) (img *image.RGBA, hotX, hotY int) {
+	return arrowArt.render(size)
 }

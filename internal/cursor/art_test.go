@@ -55,3 +55,28 @@ func TestArtworkScalesWithSize(t *testing.T) {
 		t.Error("a larger cursor should cover more pixels")
 	}
 }
+
+func TestArrowImage(t *testing.T) {
+	const size = 128
+	img, hotX, hotY := ArrowImage(size)
+
+	if b := img.Bounds(); b.Dx() != size || b.Dy() != size {
+		t.Fatalf("bounds = %dx%d, want %dx%d", b.Dx(), b.Dy(), size, size)
+	}
+	if _, _, _, a := img.At(hotX, hotY).RGBA(); a == 0 {
+		t.Errorf("hotspot (%d,%d) sits on a transparent pixel", hotX, hotY)
+	}
+	if _, _, _, a := img.At(size-1, size-1).RGBA(); a != 0 {
+		t.Errorf("bottom-right corner should be outside the artwork, got alpha=%d", a)
+	}
+}
+
+func TestArrowImageMatchesBitmapHotspot(t *testing.T) {
+	const size = 96
+	_, wantX, wantY := arrowArt.bitmap(size)
+	_, gotX, gotY := ArrowImage(size)
+
+	if gotX != wantX || gotY != wantY {
+		t.Errorf("ArrowImage hotspot = (%d,%d), bitmap hotspot = (%d,%d)", gotX, gotY, wantX, wantY)
+	}
+}
