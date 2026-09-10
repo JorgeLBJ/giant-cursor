@@ -58,6 +58,25 @@ Everything is configurable live, no restart:
 | **Language** | English / Español (auto-detected from Windows) |
 | **Start with Windows** | Toggle autostart |
 
+### Game overlay (beta)
+
+Games such as World of Warcraft ship their own cursor artwork, so enlarging the
+Windows cursor does not reach them. The overlay draws a separate always-on-top
+marker that follows the pointer instead.
+
+Pick a mode from the tray menu, or start with `-overlay halo`:
+
+- **Halo ring** draws a ring around the pointer. Recommended.
+- **Large pointer** draws a big arrow. You will see two cursors, yours and the
+  game's, because the game keeps drawing its own.
+
+Two things to know:
+
+- **Play in windowed or borderless mode.** Exclusive fullscreen bypasses the
+  desktop compositor, so nothing drawn on top of it is visible.
+- **The overlay never touches the game.** It is an ordinary window: nothing is
+  injected into the game process, nothing is hooked, and no game memory is read.
+
 ## Why does Windows warn about this?
 
 When you run the download, Windows may show **"Windows protected your PC — unknown

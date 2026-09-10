@@ -11,11 +11,13 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/JorgeLBJ/giant-cursor/internal/config"
 	"github.com/JorgeLBJ/giant-cursor/internal/control"
 	"github.com/JorgeLBJ/giant-cursor/internal/cursor"
 	"github.com/JorgeLBJ/giant-cursor/internal/i18n"
 	"github.com/JorgeLBJ/giant-cursor/internal/input"
 	"github.com/JorgeLBJ/giant-cursor/internal/lifecycle"
+	"github.com/JorgeLBJ/giant-cursor/internal/overlay"
 	"github.com/JorgeLBJ/giant-cursor/internal/shake"
 
 	"golang.org/x/sys/windows"
@@ -38,6 +40,7 @@ type settings struct {
 	HoldMillis  int64  `json:"hold_ms"`
 	Style       string `json:"style"`
 	Lang        string `json:"lang"`
+	Overlay     string `json:"overlay"`
 	BaseSize    int    `json:"base_cursor_size"` // user's normal cursor size (px)
 }
 
@@ -79,6 +82,12 @@ func loadSettings(def settings) settings {
 	}
 	if s.Lang == "" {
 		s.Lang = def.Lang
+	}
+	// A config written before the overlay existed has no key at all. Without
+	// this the value stays empty, which reads as off but matches none of the
+	// tray's option values, so the menu shows no option marked.
+	if s.Overlay == "" {
+		s.Overlay = def.Overlay
 	}
 	return s
 }
@@ -129,6 +138,7 @@ func main() {
 	sens := flag.String("sensitivity", "medium", "shake sensitivity: low|medium|high")
 	hold := flag.Int64("hold-ms", 1000, "milliseconds to stay enlarged after the last shake")
 	lang := flag.String("lang", "", "tray menu language: en|es (default: auto-detect from Windows)")
+	overlayMode := flag.String("overlay", "off", "game overlay: off|halo|pointer (beta, needs windowed mode)")
 	install := flag.Bool("install", false, "enable autostart and save settings, then run")
 	uninstall := flag.Bool("uninstall", false, "disable autostart, restore cursors, and exit")
 	restore := flag.Bool("restore", false, "restore cursors and exit (panic button)")
@@ -162,7 +172,7 @@ func main() {
 	}
 	defer release()
 
-	s := loadSettings(settings{Scale: *scale, Sensitivity: *sens, HoldMillis: *hold, Style: string(cursor.StyleCrisp), Lang: defaultLang()})
+	s := loadSettings(settings{Scale: *scale, Sensitivity: *sens, HoldMillis: *hold, Style: string(cursor.StyleCrisp), Lang: defaultLang(), Overlay: string(config.OverlayOff)})
 	// Explicit flags override the config file.
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -172,6 +182,8 @@ func main() {
 			s.Sensitivity = *sens
 		case "hold-ms":
 			s.HoldMillis = *hold
+		case "overlay":
+			s.Overlay = *overlayMode
 		case "lang":
 			s.Lang = *lang
 		}
@@ -192,15 +204,26 @@ func main() {
 	}
 
 	normal := s.BaseSize
-	newEnlarger := func(scale int, style string) cursor.Enlarger {
-		return cursor.NewWin32(scale, normal, cursor.Style(style))
+
+	// One overlay for the whole process. The controller rebuilds the effector
+	// on every settings change, so creating it inside newEnlarger would leak a
+	// window per menu click; the mode and scale are pushed into it instead.
+	ov := overlay.New()
+
+	newEnlarger := func(set control.Settings) cursor.Enlarger {
+		ov.SetMode(config.ParseOverlayMode(set.Overlay))
+		ov.SetScale(cursor.EnlargedSize(normal, set.Scale))
+		return cursor.Multi{
+			cursor.NewWin32(set.Scale, normal, cursor.Style(set.Style)),
+			ov,
+		}
 	}
 
 	ctrl := control.New(
-		control.Settings{Scale: s.Scale, Sensitivity: s.Sensitivity, HoldMillis: s.HoldMillis, Style: s.Style},
+		control.Settings{Scale: s.Scale, Sensitivity: s.Sensitivity, HoldMillis: s.HoldMillis, Style: s.Style, Overlay: s.Overlay},
 		newEnlarger,
 		func(ns control.Settings) {
-			s.Scale, s.Sensitivity, s.HoldMillis, s.Style = ns.Scale, ns.Sensitivity, ns.HoldMillis, ns.Style
+			s.Scale, s.Sensitivity, s.HoldMillis, s.Style, s.Overlay = ns.Scale, ns.Sensitivity, ns.HoldMillis, ns.Style, ns.Overlay
 			_ = saveSettings(s)
 		},
 	)
@@ -220,23 +243,26 @@ func main() {
 		s.Scale, s.Sensitivity, s.HoldMillis)
 
 	cb := lifecycle.TrayCallbacks{
-		Strings:       func() i18n.Strings { return i18n.For(s.Lang) },
-		IconICO:       appICO,
-		Styles:        []string{string(cursor.StyleCrisp), string(cursor.StyleSystem)},
-		Scales:        []int{2, 3, 4, 5, 6, 8},
-		Sensitivities: []string{"low", "medium", "high"},
-		Holds:         []int64{700, 1000, 1500},
-		Langs:         []string{"en", "es"},
+		Strings:            func() i18n.Strings { return i18n.For(s.Lang) },
+		IconICO:            appICO,
+		Styles:             []string{string(cursor.StyleCrisp), string(cursor.StyleSystem)},
+		Scales:             []int{2, 3, 4, 5, 6, 8},
+		Sensitivities:      []string{"low", "medium", "high"},
+		Holds:              []int64{700, 1000, 1500},
+		Langs:              []string{"en", "es"},
+		Overlays:           []string{string(config.OverlayOff), string(config.OverlayHalo), string(config.OverlayPointer)},
 		CurrentStyle:       func() string { return ctrl.Get().Style },
 		CurrentScale:       func() int { return ctrl.Get().Scale },
 		CurrentSensitivity: func() string { return ctrl.Get().Sensitivity },
 		CurrentHold:        func() int64 { return ctrl.Get().HoldMillis },
 		CurrentLang:        func() string { return s.Lang },
+		CurrentOverlay:     func() string { return ctrl.Get().Overlay },
 		AutostartOn:        autostartEnabled,
 		OnStyle:            ctrl.SetStyle,
 		OnScale:            ctrl.SetScale,
 		OnSensitivity:      ctrl.SetSensitivity,
 		OnHold:             ctrl.SetHold,
+		OnOverlay:          ctrl.SetOverlay,
 		OnLang: func(code string) {
 			s.Lang = code
 			_ = saveSettings(s)
