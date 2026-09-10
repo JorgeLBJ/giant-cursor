@@ -68,6 +68,7 @@ const (
 	idToggleAutostart = 400
 	idStyleBase       = 500 // idStyleBase + index
 	idLangBase        = 600 // idLangBase + index
+	idOverlayBase     = 700 // idOverlayBase + index
 	idQuit            = 900
 )
 
@@ -83,12 +84,14 @@ type TrayCallbacks struct {
 	Sensitivities []string // e.g. ["low","medium","high"]
 	Holds         []int64  // e.g. [700,1000,1500]
 	Langs         []string // e.g. ["en","es"]
+	Overlays      []string // e.g. ["off","halo","pointer"]
 
 	CurrentStyle       func() string
 	CurrentScale       func() int
 	CurrentSensitivity func() string
 	CurrentHold        func() int64
 	CurrentLang        func() string
+	CurrentOverlay     func() string
 	AutostartOn        func() bool
 
 	OnStyle           func(value string)
@@ -96,6 +99,7 @@ type TrayCallbacks struct {
 	OnSensitivity     func(name string)
 	OnHold            func(ms int64)
 	OnLang            func(code string)
+	OnOverlay         func(value string)
 	OnToggleAutostart func()
 	OnQuit            func()
 }
@@ -320,6 +324,12 @@ func showMenu(hwnd uintptr) {
 	}
 	appendMenu(menu, mfString|mfPopup, langMenu, s.MenuLanguage)
 
+	overlayMenu := createSub()
+	for i, v := range trayCB.Overlays {
+		appendMenu(overlayMenu, checkFlag(v == trayCB.CurrentOverlay()), uintptr(idOverlayBase+i), labelAt(s.Overlays, i, v))
+	}
+	appendMenu(menu, mfString|mfPopup, overlayMenu, s.MenuOverlay)
+
 	appendMenu(menu, checkFlag(trayCB.AutostartOn()), idToggleAutostart, s.Autostart)
 	appendMenu(menu, mfSeparator, 0, "")
 	appendMenu(menu, mfString, idQuit, s.Quit)
@@ -348,6 +358,11 @@ func dispatch(id int) {
 		i := id - idLangBase
 		if i >= 0 && i < len(trayCB.Langs) {
 			trayCB.OnLang(trayCB.Langs[i])
+		}
+	case id >= idOverlayBase && id < idOverlayBase+100:
+		i := id - idOverlayBase
+		if i >= 0 && i < len(trayCB.Overlays) {
+			trayCB.OnOverlay(trayCB.Overlays[i])
 		}
 	case id >= idScaleBase && id < idSensBase:
 		trayCB.OnScale(id - idScaleBase)
