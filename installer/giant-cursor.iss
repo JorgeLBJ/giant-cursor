@@ -3,7 +3,7 @@
 ; Expects giant-cursor.exe to already be built at the repository root.
 
 #define AppName "Giant Cursor"
-#define AppVersion "1.0.0"
+#define AppVersion "1.1.0"
 #define AppExe "giant-cursor.exe"
 
 [Setup]
